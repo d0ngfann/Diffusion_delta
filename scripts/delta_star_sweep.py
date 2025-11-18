@@ -18,6 +18,7 @@ import sys
 import time
 import itertools
 from datetime import timedelta
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 
@@ -64,7 +65,7 @@ def generate_parameter_combinations():
     thrshld_values = [2, 3, 4]
     p1_values = [0.1, 0.3, 0.5, 0.7, 0.9]
     p2_values = [0.3, 0.5, 0.7, 0.9, 1.0]
-    beta_values = [1, 3, 5]
+    beta_values = [1, 3, 5, 7]
 
     # Generate all combinations
     all_combos = list(itertools.product(
@@ -131,15 +132,30 @@ def run_single_combination(params, verbose=False):
             beta=params['beta'],
             trials=50,  # Standard number of trials
             seeds=params['seeds'],
-            delta_values=None,  # Use default linspace(0, 1, 51)
+            delta_values=None,  
             verbose=verbose
         )
+
+        # Extract dominant network info from results_summary (take first row since values are repeated)
+        dominant_info = {
+            'delta_star_count': results_summary['delta_star_count'].iloc[0],
+            'delta_star_values': results_summary['delta_star_values'].iloc[0],
+            'dominant_below': results_summary['dominant_below'].iloc[0],
+            'dominant_above': results_summary['dominant_above'].iloc[0],
+            'always_dominant': results_summary['always_dominant'].iloc[0]
+        }
 
         # Extract results
         result = {
             'primary_delta_star': delta_star,
             'num_intersections': len(all_intersections) if all_intersections else 0,
-            'status': 'not_found' if delta_star is None else ('multiple' if len(all_intersections) > 1 else 'found')
+            'status': 'not_found' if delta_star is None else ('multiple' if len(all_intersections) > 1 else 'found'),
+            # Add dominant network info
+            'delta_star_count': dominant_info['delta_star_count'],
+            'delta_star_values': dominant_info['delta_star_values'],
+            'dominant_below': dominant_info['dominant_below'],
+            'dominant_above': dominant_info['dominant_above'],
+            'always_dominant': dominant_info['always_dominant']
         }
 
         # Add individual intersection values (up to 5)
@@ -158,6 +174,11 @@ def run_single_combination(params, verbose=False):
             'primary_delta_star': None,
             'num_intersections': 0,
             'status': 'error',
+            'delta_star_count': 0,
+            'delta_star_values': None,
+            'dominant_below': None,
+            'dominant_above': None,
+            'always_dominant': None,
             'intersection_1': None,
             'intersection_2': None,
             'intersection_3': None,
@@ -167,15 +188,17 @@ def run_single_combination(params, verbose=False):
         }
 
 
-def run_parameter_sweep(combinations, output_dir='../output_data'):
+def run_parameter_sweep(combinations, output_dir='../output_data', n_workers=8):
     """
-    Run the complete parameter sweep.
+    Run the complete parameter sweep using parallel processing.
 
     Parameters:
         combinations: list of dicts
             Parameter combinations to test
         output_dir: str
             Directory to save results
+        n_workers: int
+            Number of parallel workers (CPU cores) to use (default: 8)
 
     Returns:
         pd.DataFrame: Results dataframe
@@ -183,40 +206,84 @@ def run_parameter_sweep(combinations, output_dir='../output_data'):
     n_combos = len(combinations)
     results = []
 
-    print(f"\nStarting parameter sweep...")
+    print(f"\nStarting parameter sweep with {n_workers} parallel workers...")
     print(f"Total combinations to test: {n_combos}")
-    print(f"Estimated time: {estimate_runtime(n_combos)}")
+    print(f"Estimated sequential time: {estimate_runtime(n_combos)}")
+    print(f"Expected parallel speedup: ~{n_workers}x faster")
     print()
 
     start_time = time.time()
 
-    # Use tqdm for progress bar
-    for i, params in enumerate(tqdm(combinations, desc="Progress", unit="combo")):
-        combo_start = time.time()
+    # Use ProcessPoolExecutor for parallel execution
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        # Submit all jobs
+        future_to_params = {
+            executor.submit(run_single_combination, params, False): params
+            for params in combinations
+        }
 
-        # Run analysis for this combination
-        result = run_single_combination(params, verbose=False)
+        # Process results as they complete
+        completed = 0
+        if HAS_TQDM:
+            progress_bar = tqdm(total=n_combos, desc="Progress", unit="combo")
 
-        # Merge parameters and results
-        full_result = {**params, **result}
-        results.append(full_result)
+        for future in as_completed(future_to_params):
+            params = future_to_params[future]
+            completed += 1
 
-        # Calculate timing
-        combo_time = time.time() - combo_start
-        elapsed = time.time() - start_time
-        remaining = (elapsed / (i + 1)) * (n_combos - i - 1)
+            try:
+                result = future.result()
 
-        # Print status for this combination
-        status_symbol = "✓" if result['status'] == 'found' else ("✗" if result['status'] == 'error' else "○")
-        delta_str = f"{result['primary_delta_star']:.4f}" if result['primary_delta_star'] is not None else "None"
+                # Merge parameters and results
+                full_result = {**params, **result}
+                results.append(full_result)
 
-        tqdm.write(f"{status_symbol} [{i+1}/{n_combos}] k={params['k']}, i={params['thrshld']}, "
-                   f"p1={params['p1']}, p2={params['p2']}, β={params['beta']} → δ*={delta_str} | "
-                   f"Elapsed: {timedelta(seconds=int(elapsed))} | "
-                   f"Remaining: {timedelta(seconds=int(remaining))}")
+                # Calculate timing
+                elapsed = time.time() - start_time
+                remaining = (elapsed / completed) * (n_combos - completed)
+
+                # Print status for this combination
+                status_symbol = "✓" if result['status'] == 'found' else ("✗" if result['status'] == 'error' else "○")
+                delta_str = f"{result['primary_delta_star']:.4f}" if result['primary_delta_star'] is not None else "None"
+
+                msg = (f"{status_symbol} [{completed}/{n_combos}] k={params['k']}, i={params['thrshld']}, "
+                       f"p1={params['p1']}, p2={params['p2']}, β={params['beta']} → δ*={delta_str} | "
+                       f"Elapsed: {timedelta(seconds=int(elapsed))} | "
+                       f"Remaining: {timedelta(seconds=int(remaining))}")
+
+                if HAS_TQDM:
+                    tqdm.write(msg)
+                    progress_bar.update(1)
+                else:
+                    print(msg)
+
+            except Exception as e:
+                print(f"\n✗ Unexpected error in combination {params['combination_id']}: {str(e)}")
+                # Add error result
+                error_result = {
+                    **params,
+                    'primary_delta_star': None,
+                    'num_intersections': 0,
+                    'status': 'error',
+                    'delta_star_count': 0,
+                    'delta_star_values': None,
+                    'dominant_below': None,
+                    'dominant_above': None,
+                    'always_dominant': None,
+                    'error_message': str(e)
+                }
+                results.append(error_result)
+
+                if HAS_TQDM:
+                    progress_bar.update(1)
+
+        if HAS_TQDM:
+            progress_bar.close()
 
     total_time = time.time() - start_time
     print(f"\n✓ Sweep complete! Total time: {timedelta(seconds=int(total_time))}")
+    print(f"  Average time per combination: {total_time/n_combos:.2f} seconds")
+    print(f"  Speedup achieved: ~{estimate_runtime(n_combos, 5).split(':')[0]}h → {total_time/3600:.1f}h")
 
     # Convert to DataFrame
     df = pd.DataFrame(results)
@@ -300,6 +367,37 @@ def generate_summary_statistics(df, output_dir='../output_data'):
             )
             for val, rate in grouped.items():
                 f.write(f"  {param}={val}: {rate:.1f}% success\n")
+
+        # Dominant network statistics
+        f.write("\n\nDOMINANT NETWORK STATISTICS\n")
+        f.write("-"*70 + "\n")
+
+        # Count cases with always-dominant network
+        always_dominant_cases = df[df['always_dominant'].notna()]
+        if len(always_dominant_cases) > 0:
+            f.write(f"\nCases with always-dominant network: {len(always_dominant_cases)}\n")
+            dominant_counts = always_dominant_cases['always_dominant'].value_counts()
+            for network_type, count in dominant_counts.items():
+                pct = count / len(always_dominant_cases) * 100
+                f.write(f"  - Always {network_type}: {count} ({pct:.1f}%)\n")
+
+        # Count cases with single delta* (clear transition)
+        single_delta_cases = df[df['delta_star_count'] == 1]
+        if len(single_delta_cases) > 0:
+            f.write(f"\nCases with single δ* (clear transition): {len(single_delta_cases)}\n")
+            # Count transition types
+            clustered_to_random = len(single_delta_cases[single_delta_cases['dominant_below'] == 'Clustered'])
+            random_to_clustered = len(single_delta_cases[single_delta_cases['dominant_below'] == 'Random'])
+            f.write(f"  - Clustered → Random transitions: {clustered_to_random}\n")
+            f.write(f"  - Random → Clustered transitions: {random_to_clustered}\n")
+
+        # Count cases with multiple delta* (complex behavior)
+        multiple_delta_cases = df[df['delta_star_count'] > 1]
+        if len(multiple_delta_cases) > 0:
+            f.write(f"\nCases with multiple δ* (complex behavior): {len(multiple_delta_cases)}\n")
+            delta_count_dist = multiple_delta_cases['delta_star_count'].value_counts().sort_index()
+            for count, freq in delta_count_dist.items():
+                f.write(f"  - {int(count)} intersections: {freq} cases\n")
 
         f.write("\n" + "="*70 + "\n")
 
