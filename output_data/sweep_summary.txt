@@ -1,0 +1,102 @@
+======================================================================
+DELTA-STAR PARAMETER SWEEP SUMMARY
+======================================================================
+
+OVERALL STATISTICS
+----------------------------------------------------------------------
+Total combinations tested: 2124
+  - Delta-star found (single): 290
+  - Multiple intersections: 21
+  - Not found: 1813
+
+DELTA-STAR STATISTICS (when found)
+----------------------------------------------------------------------
+Average ¥ä*: 0.3075
+Median ¥ä*: 0.2721
+Std Dev: 0.2350
+Min ¥ä*: 0.0011
+Max ¥ä*: 1.0000
+
+
+STATISTICS BY K
+----------------------------------------------------------------------
+    count      mean       std
+k                            
+4      49  0.487365  0.298876
+8     111  0.309963  0.198359
+12    151  0.247312  0.206151
+
+STATISTICS BY THRSHLD
+----------------------------------------------------------------------
+         count      mean       std
+thrshld                           
+2          210  0.308062  0.231912
+3           77  0.300335  0.218365
+4           24  0.325501  0.312565
+
+STATISTICS BY P1
+----------------------------------------------------------------------
+     count      mean       std
+p1                            
+0.1    156  0.447402  0.217486
+0.2     97  0.207854  0.153916
+0.3     58  0.097833  0.129205
+
+STATISTICS BY P2
+----------------------------------------------------------------------
+     count      mean       std
+p2                            
+0.3     18  0.341209  0.244234
+0.5     29  0.363897  0.270536
+0.6     37  0.286644  0.233800
+0.7     40  0.311414  0.236537
+0.8     41  0.285832  0.226192
+0.9     46  0.289839  0.224794
+1.0     51  0.313463  0.243143
+4.0     49  0.302763  0.226747
+
+STATISTICS BY BETA
+----------------------------------------------------------------------
+      count      mean       std
+beta                           
+1        71  0.411421  0.292218
+3        71  0.262077  0.183826
+5        86  0.279857  0.218833
+7        83  0.286082  0.212222
+
+SUCCESS RATE BY PARAMETER
+----------------------------------------------------------------------
+
+k:
+  k=4: 6.5% success
+  k=8: 15.5% success
+  k=12: 18.9% success
+
+thrshld:
+  thrshld=2: 28.7% success
+  thrshld=3: 9.7% success
+  thrshld=4: 2.5% success
+
+beta:
+  beta=1: 9.6% success
+  beta=3: 13.4% success
+  beta=5: 16.0% success
+  beta=7: 15.6% success
+
+
+DOMINANT NETWORK STATISTICS
+----------------------------------------------------------------------
+
+Cases with always-dominant network: 1813
+  - Always Random: 1457 (80.4%)
+  - Always Clustered: 356 (19.6%)
+
+Cases with single ¥ä* (clear transition): 290
+  - Clustered ¡æ Random transitions: 276
+  - Random ¡æ Clustered transitions: 14
+
+Cases with multiple ¥ä* (complex behavior): 21
+  - 2 intersections: 19 cases
+  - 3 intersections: 2 cases
+
+======================================================================

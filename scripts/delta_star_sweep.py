@@ -63,8 +63,8 @@ def generate_parameter_combinations():
     # Define parameter grids
     k_values = [4, 8, 12]
     thrshld_values = [2, 3, 4]
-    p1_values = [0.1, 0.3, 0.5, 0.7, 0.9]
-    p2_values = [0.3, 0.5, 0.7, 0.9, 1.0]
+    p1_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    p2_values = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     beta_values = [1, 3, 5, 7]
 
     # Generate all combinations
