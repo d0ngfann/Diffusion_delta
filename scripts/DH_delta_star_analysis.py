@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import networkx as nx
-from helper_functions import (
+from DH_helper_functions import (
     sirsic_wmem, run_simulation,
     seed_strat_one_nbrs, seed_strat_random, seed_strat_adj
 )
@@ -108,8 +108,8 @@ def calculate_V(new_infections, delta):
     return V
 
 
-def run_delta_simulations(k=8, n=None, thrshld=2, p1=0.3, p2=0.6,
-                          beta=1, trials=20, seeds=5):
+def run_delta_simulations(k=4, n=None, thrshld=2, p1=0.1, p2=0.7,
+                          beta=5, trials=20, seeds=2):
     """
     Run simulations for both clustered and random networks with full time series.
 
@@ -253,12 +253,13 @@ def compute_V_across_deltas(results_df, delta_values):
     return V_matrix
 
 
-def find_delta_star(delta_values, V_clustered_mean, V_random_mean, min_delta=0.05):
+def find_delta_star(delta_values, V_clustered_mean, V_random_mean, n, min_delta=0.0001):
     """
     Find ALL δ* values where clustered and random networks have equal performance.
 
-    Uses linear interpolation to find intersection points, filtering out trivial
-    intersections near delta=0.
+    Uses linear interpolation to find intersection points, filtering out:
+    1. Trivial intersections near delta=0
+    2. Intersections in the "full spread" regime (V > 60% of population)
 
     Parameters:
         delta_values: array-like
@@ -267,8 +268,10 @@ def find_delta_star(delta_values, V_clustered_mean, V_random_mean, min_delta=0.0
             Mean V values for clustered network at each delta
         V_random_mean: array-like
             Mean V values for random network at each delta
+        n: int
+            Network size (number of nodes) for calculating 60% threshold
         min_delta: float
-            Minimum delta threshold to exclude trivial intersections (default: 0.05)
+            Minimum delta threshold to exclude trivial intersections (default: 0.0001)
 
     Returns:
         tuple: (primary_delta_star, all_intersections)
@@ -279,19 +282,31 @@ def find_delta_star(delta_values, V_clustered_mean, V_random_mean, min_delta=0.0
                     'delta_star': float - the intersection value
                     'interval': tuple - (lower_delta, upper_delta) bracketing the intersection
                     'transition': str - direction of transition ('clustered_to_random' or 'random_to_clustered')
+                    'V_at_intersection': float - interpolated V value at delta*
+                    'is_valid': bool - whether V <= 60% threshold (minimal spread regime)
     """
+    # Calculate the 60% threshold for "minimal spread" regime
+    # Only intersections below this threshold are considered valid
+    spread_threshold = n * 0.6
+
+    # Convert to numpy arrays for easier interpolation
+    delta_values = np.array(delta_values)
+    V_clustered_mean = np.array(V_clustered_mean)
+    V_random_mean = np.array(V_random_mean)
+
     # Calculate the difference between random and clustered networks at each delta
     # Positive values = random network performing better
     # Negative values = clustered network performing better
-    diff = np.array(V_random_mean) - np.array(V_clustered_mean)
+    diff = V_random_mean - V_clustered_mean
 
     # Find where the difference changes sign (crosses zero)
     # np.diff(np.sign(diff)) will be non-zero where sign changes
     # This identifies the interval where the curves intersect
     sign_changes = np.where(np.diff(np.sign(diff)))[0]
 
-    # List to store all meaningful intersections
+    # List to store all intersections (both valid and invalid for tracking)
     all_intersections = []
+    valid_intersections = []
 
     # Process each sign change to find exact intersection points
     for idx in sign_changes:
@@ -305,69 +320,172 @@ def find_delta_star(delta_values, V_clustered_mean, V_random_mean, min_delta=0.0
         # This solves: y = y1 + (y2-y1)/(x2-x1) * (x - x1) = 0 for x
         delta_star_candidate = x1 - y1 * (x2 - x1) / (y2 - y1)
 
-        # Filter out trivial intersections near delta=0
-        if delta_star_candidate >= min_delta:
-            # Determine transition direction
-            # If diff goes from negative to positive: clustered was better, now random is better
-            # If diff goes from positive to negative: random was better, now clustered is better
-            if y1 < 0 and y2 > 0:
-                transition = 'clustered_to_random'
-            elif y1 > 0 and y2 < 0:
-                transition = 'random_to_clustered'
-            else:
-                # Handle edge case where one of the values is exactly zero
-                transition = 'clustered_to_random' if y2 > y1 else 'random_to_clustered'
+        # Interpolate V value at delta* to check 60% threshold
+        # Since this is the intersection point, V_clustered ≈ V_random at delta*
+        # We use V_clustered for the check (could use either since they're equal)
+        V_c1, V_c2 = V_clustered_mean[idx], V_clustered_mean[idx + 1]
+        V_at_intersection = V_c1 + (V_c2 - V_c1) * (delta_star_candidate - x1) / (x2 - x1)
 
-            # Store this intersection
-            all_intersections.append({
-                'delta_star': delta_star_candidate,
-                'interval': (x1, x2),
-                'transition': transition
-            })
+        # Check validity criteria
+        is_valid = (delta_star_candidate >= min_delta) and (V_at_intersection <= spread_threshold)
+
+        # Determine transition direction
+        # If diff goes from negative to positive: clustered was better, now random is better
+        # If diff goes from positive to negative: random was better, now clustered is better
+        if y1 < 0 and y2 > 0:
+            transition = 'clustered_to_random'
+        elif y1 > 0 and y2 < 0:
+            transition = 'random_to_clustered'
+        else:
+            # Handle edge case where one of the values is exactly zero
+            transition = 'clustered_to_random' if y2 > y1 else 'random_to_clustered'
+
+        # Store this intersection with validity info
+        intersection_dict = {
+            'delta_star': delta_star_candidate,
+            'interval': (x1, x2),
+            'transition': transition,
+            'V_at_intersection': V_at_intersection,
+            'is_valid': is_valid
+        }
+
+        all_intersections.append(intersection_dict)
+
+        # Only keep valid intersections for return
+        if is_valid:
+            valid_intersections.append(intersection_dict)
 
     # Print detailed analysis of intersections
     print("\n" + "="*70)
     print("INTERSECTION ANALYSIS")
     print("="*70)
 
+    # Report all intersections found (valid + invalid)
     if len(all_intersections) == 0:
-        print(f"Found 0 meaningful intersections (threshold: δ ≥ {min_delta})")
-        if len(sign_changes) > 0:
-            print(f"\nNote: {len(sign_changes)} intersection(s) were found but all were")
-            print(f"      below the minimum threshold of {min_delta} (trivial intersections).")
-        else:
-            print("\nNo intersections found in the given delta range.")
+        print(f"Found 0 intersections in the given delta range.")
         print("="*70 + "\n")
         return None, []
 
-    print(f"Found {len(all_intersections)} meaningful intersection(s):\n")
+    print(f"Found {len(all_intersections)} total intersection(s):\n")
 
-    # Print details for each intersection
+    # Print details for each intersection, marking valid vs invalid
     for i, intersection in enumerate(all_intersections, 1):
-        print(f"Intersection {i}:")
+        validity_str = "✓ VALID" if intersection['is_valid'] else "✗ INVALID"
+        print(f"Intersection {i}: {validity_str}")
         print(f"  δ* = {intersection['delta_star']:.4f}")
-        print(f"  Interval: [{intersection['interval'][0]:.2f}, {intersection['interval'][1]:.2f}]")
+        print(f"  V at δ* = {intersection['V_at_intersection']:.2f} (threshold: {spread_threshold:.2f})")
+        print(f"  Interval: [{intersection['interval'][0]:.4f}, {intersection['interval'][1]:.4f}]")
+
         # Format transition direction for readability
         if intersection['transition'] == 'clustered_to_random':
             print(f"  Transition: Clustered → Random (clustered advantage ends)")
         else:
             print(f"  Transition: Random → Clustered (random advantage ends)")
+
+        # Explain why invalid if applicable
+        if not intersection['is_valid']:
+            if intersection['delta_star'] < min_delta:
+                print(f"  Reason: δ* < {min_delta} (trivial intersection)")
+            elif intersection['V_at_intersection'] > spread_threshold:
+                print(f"  Reason: V > {spread_threshold:.2f} (full spread regime)")
         print()
 
-    # Check for multiple intersections and warn about non-monotonic behavior
-    if len(all_intersections) > 1:
-        print("⚠ WARNING: MULTIPLE intersections detected - complex behavior!")
+    # Report valid intersections
+    print(f"Valid intersections (minimal spread regime): {len(valid_intersections)}")
+
+    if len(valid_intersections) == 0:
+        print("\n⚠ No valid delta* found!")
+        print(f"  All intersections were filtered out:")
+        print(f"    - Trivial (δ < {min_delta}): {sum(1 for i in all_intersections if i['delta_star'] < min_delta)}")
+        print(f"    - Full spread (V > {spread_threshold:.2f}): {sum(1 for i in all_intersections if i['V_at_intersection'] > spread_threshold)}")
+        print("="*70 + "\n")
+        return None, []
+
+    # Check for multiple valid intersections and warn about non-monotonic behavior
+    if len(valid_intersections) > 1:
+        print("\n⚠ WARNING: MULTIPLE valid intersections detected - complex behavior!")
         print("  The relative performance of networks is NON-MONOTONIC with δ.")
         print("  This indicates that the optimal network structure changes multiple")
         print("  times as the temporal preference shifts.")
-        print(f"  Recommending PRIMARY δ* = {all_intersections[0]['delta_star']:.4f} (first meaningful transition)")
+        print(f"  Recommending PRIMARY δ* = {valid_intersections[0]['delta_star']:.4f} (first valid transition)")
 
     print("="*70 + "\n")
 
-    # Return the first meaningful intersection as primary (for backward compatibility)
-    # along with the complete list of all intersections
-    primary_delta_star = all_intersections[0]['delta_star']
-    return primary_delta_star, all_intersections
+    # Return the first valid intersection as primary (for backward compatibility)
+    # along with the complete list of valid intersections
+    primary_delta_star = valid_intersections[0]['delta_star']
+    return primary_delta_star, valid_intersections
+
+
+def determine_dominant_network(V_clustered_mean, V_random_mean, valid_intersections):
+    """
+    Determine which network type is dominant and when.
+
+    Parameters:
+        V_clustered_mean: array-like
+            Mean V values for clustered network at each delta
+        V_random_mean: array-like
+            Mean V values for random network at each delta
+        valid_intersections: list of dicts
+            Valid delta* intersections (after filtering)
+
+    Returns:
+        dict with keys:
+            - 'delta_star_count': int (0, 1, or 2+)
+            - 'delta_star_values': str (formatted string of delta* values)
+            - 'dominant_below': str or None (for count=1 only)
+            - 'dominant_above': str or None (for count=1 only)
+            - 'always_dominant': str or None (for count=0 only)
+    """
+    count = len(valid_intersections)
+
+    # Initialize result dict
+    result = {
+        'delta_star_count': count,
+        'delta_star_values': None,
+        'dominant_below': None,
+        'dominant_above': None,
+        'always_dominant': None
+    }
+
+    if count == 0:
+        # No delta* found - one network always dominates
+        # Calculate average difference across all delta values
+        diff = np.array(V_random_mean) - np.array(V_clustered_mean)
+        avg_diff = np.mean(diff)
+
+        if avg_diff > 0:
+            result['always_dominant'] = 'Random'
+        else:
+            result['always_dominant'] = 'Clustered'
+
+        result['delta_star_values'] = 'None'
+
+    elif count == 1:
+        # Exactly one delta* - clear transition
+        delta_star = valid_intersections[0]['delta_star']
+        transition = valid_intersections[0]['transition']
+
+        result['delta_star_values'] = f"{delta_star:.4f}"
+
+        # Determine which network dominates before and after delta*
+        if transition == 'clustered_to_random':
+            result['dominant_below'] = 'Clustered'
+            result['dominant_above'] = 'Random'
+        else:  # 'random_to_clustered'
+            result['dominant_below'] = 'Random'
+            result['dominant_above'] = 'Clustered'
+
+    else:
+        # Multiple delta* values - complex behavior
+        # Just list the values, don't determine dominance
+        delta_star_list = [f"{intersection['delta_star']:.4f}" for intersection in valid_intersections]
+        result['delta_star_values'] = '[' + ', '.join(delta_star_list) + ']'
+
+        # Leave dominant_below, dominant_above, always_dominant as None
+        # User needs to interpret the complex pattern themselves
+
+    return result
 
 
 def visualize_delta_analysis(delta_values, V_clustered_mean, V_clustered_se,
@@ -395,9 +513,9 @@ def visualize_delta_analysis(delta_values, V_clustered_mean, V_clustered_se,
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # Plot clustered network performance curve
-    # 'o-' = circles connected by lines
-    ax.plot(delta_values, V_clustered_mean, 'o-', color='blue',
-            linewidth=2, markersize=8, label='Clustered Network')
+    # '-' = line only (no markers)
+    ax.plot(delta_values, V_clustered_mean, '-', color='blue',
+            linewidth=2, label='Clustered Network')
     # Add shaded region for standard error (uncertainty band)
     ax.fill_between(delta_values,
                     V_clustered_mean - V_clustered_se,  # Lower bound
@@ -405,9 +523,9 @@ def visualize_delta_analysis(delta_values, V_clustered_mean, V_clustered_se,
                     color='blue', alpha=0.2)            # Semi-transparent blue
 
     # Plot random network performance curve
-    # 's-' = squares connected by lines
-    ax.plot(delta_values, V_random_mean, 's-', color='red',
-            linewidth=2, markersize=8, label='Random Network')
+    # '-' = line only (no markers)
+    ax.plot(delta_values, V_random_mean, '-', color='red',
+            linewidth=2, label='Random Network')
     # Add shaded region for standard error
     ax.fill_between(delta_values,
                     V_random_mean - V_random_se,
@@ -503,7 +621,7 @@ def visualize_delta_analysis(delta_values, V_clustered_mean, V_clustered_se,
 ###################
 # Main Execution
 
-def main(k=4, n=None, thrshld=4, p1=0.75, p2=0.75, beta=1, trials=50, seeds=None,
+def main(k=4, n=None, thrshld=2, p1=0.1, p2=1.0, beta=5, trials=50, seeds=None,
          delta_values=None, verbose=True):
     """
     Main function to run the complete δ* analysis.
@@ -549,7 +667,7 @@ def main(k=4, n=None, thrshld=4, p1=0.75, p2=0.75, beta=1, trials=50, seeds=None
     if seeds is None:
         seeds = thrshld
     if delta_values is None:
-        delta_values = np.linspace(0, 1, 51).tolist()
+        delta_values = np.linspace(0, 1, 1001).tolist()
 
     # Suppress output if not verbose
     import sys
@@ -624,75 +742,76 @@ def main(k=4, n=None, thrshld=4, p1=0.75, p2=0.75, beta=1, trials=50, seeds=None
 
         # Find ALL delta values where the two curves intersect
         # This is the critical threshold (or thresholds) that separate the two regimes
-        delta_star, all_intersections = find_delta_star(delta_values, V_clustered_mean, V_random_mean)
+        # Pass n for 60% threshold filtering
+        delta_star, all_intersections = find_delta_star(delta_values, V_clustered_mean, V_random_mean, n)
 
         # Interpret the result
         if delta_star is not None:
             print(f"\n*** PRIMARY δ* found: {delta_star:.4f} ***")
 
             # Check for suspiciously low delta_star values
-        if delta_star < 0.1:
-            print(f"\n⚠ WARNING: δ* = {delta_star:.4f} is suspiciously LOW!")
-            print(f"  This indicates an extreme early-adoption regime.")
-            print(f"  Potential issues to check:")
-            print(f"    - Is the minimum threshold (0.05) too permissive?")
-            print(f"    - Are the simulation parameters creating trivial dynamics?")
-            print(f"    - Consider validating with different parameter settings.")
-            print()
+            if delta_star < 0.1:
+                print(f"\n⚠ WARNING: δ* = {delta_star:.4f} is suspiciously LOW!")
+                print(f"  This indicates an extreme early-adoption regime.")
+                print(f"  Potential issues to check:")
+                print(f"    - Is the minimum threshold (0.05) too permissive?")
+                print(f"    - Are the simulation parameters creating trivial dynamics?")
+                print(f"    - Consider validating with different parameter settings.")
+                print()
 
             # Check for multiple intersections and provide extended interpretation
-        if len(all_intersections) > 1:
-            print(f"\n⚠ COMPLEX BEHAVIOR DETECTED:")
-            print(f"  Multiple intersections indicate NON-MONOTONIC relative performance.")
-            print(f"  The optimal network structure CHANGES {len(all_intersections)} times as δ varies.")
-            print(f"\nDetailed regime breakdown:")
+            if len(all_intersections) > 1:
+                print(f"\n⚠ COMPLEX BEHAVIOR DETECTED:")
+                print(f"  Multiple intersections indicate NON-MONOTONIC relative performance.")
+                print(f"  The optimal network structure CHANGES {len(all_intersections)} times as δ varies.")
+                print(f"\nDetailed regime breakdown:")
 
-            # Add beginning regime
-            first_transition = all_intersections[0]['transition']
-            if first_transition == 'clustered_to_random':
-                print(f"  1. δ < {all_intersections[0]['delta_star']:.4f}: Clustered networks dominate")
-                print(f"     (High clustering advantage in early-adoption regime)")
-            else:
-                print(f"  1. δ < {all_intersections[0]['delta_star']:.4f}: Random networks dominate")
-                print(f"     (High reach advantage in early-adoption regime)")
-
-            # Add intermediate regimes
-            for i in range(len(all_intersections)):
-                intersection = all_intersections[i]
-                if i < len(all_intersections) - 1:
-                    next_intersection = all_intersections[i + 1]
-                    # Determine which network wins in this interval
-                    if intersection['transition'] == 'clustered_to_random':
-                        winner = "Random"
-                        reason = "Reach advantage dominates"
-                    else:
-                        winner = "Clustered"
-                        reason = "Reinforcement advantage dominates"
-
-                    print(f"  {i+2}. {intersection['delta_star']:.4f} < δ < {next_intersection['delta_star']:.4f}: {winner} networks dominate")
-                    print(f"     ({reason})")
+                # Add beginning regime
+                first_transition = all_intersections[0]['transition']
+                if first_transition == 'clustered_to_random':
+                    print(f"  1. δ < {all_intersections[0]['delta_star']:.4f}: Clustered networks dominate")
+                    print(f"     (High clustering advantage in early-adoption regime)")
                 else:
-                    # Final regime (after last intersection)
-                    if intersection['transition'] == 'clustered_to_random':
-                        print(f"  {i+2}. δ > {intersection['delta_star']:.4f}: Random networks dominate")
-                        print(f"     (Reach advantage in late-adoption regime)")
+                    print(f"  1. δ < {all_intersections[0]['delta_star']:.4f}: Random networks dominate")
+                    print(f"     (High reach advantage in early-adoption regime)")
+
+                # Add intermediate regimes
+                for i in range(len(all_intersections)):
+                    intersection = all_intersections[i]
+                    if i < len(all_intersections) - 1:
+                        next_intersection = all_intersections[i + 1]
+                        # Determine which network wins in this interval
+                        if intersection['transition'] == 'clustered_to_random':
+                            winner = "Random"
+                            reason = "Reach advantage dominates"
+                        else:
+                            winner = "Clustered"
+                            reason = "Reinforcement advantage dominates"
+
+                        print(f"  {i+2}. {intersection['delta_star']:.4f} < δ < {next_intersection['delta_star']:.4f}: {winner} networks dominate")
+                        print(f"     ({reason})")
                     else:
-                        print(f"  {i+2}. δ > {intersection['delta_star']:.4f}: Clustered networks dominate")
-                        print(f"     (Reinforcement advantage in late-adoption regime)")
+                        # Final regime (after last intersection)
+                        if intersection['transition'] == 'clustered_to_random':
+                            print(f"  {i+2}. δ > {intersection['delta_star']:.4f}: Random networks dominate")
+                            print(f"     (Reach advantage in late-adoption regime)")
+                        else:
+                            print(f"  {i+2}. δ > {intersection['delta_star']:.4f}: Clustered networks dominate")
+                            print(f"     (Reinforcement advantage in late-adoption regime)")
 
-            print(f"\n  💡 Interpretation: This non-monotonic pattern suggests complex")
-            print(f"     interaction between timing, reinforcement, and reach effects.")
-            print(f"     The 'best' network depends critically on temporal preferences.")
+                print(f"\n  💡 Interpretation: This non-monotonic pattern suggests complex")
+                print(f"     interaction between timing, reinforcement, and reach effects.")
+                print(f"     The 'best' network depends critically on temporal preferences.")
 
-        else:
-            # Single intersection - standard interpretation
-            print(f"\nInterpretation:")
-            print(f"  • For δ < {delta_star:.4f}: Clustered networks outperform")
-            print(f"    → Social reinforcement is more valuable")
-            print(f"    → Early, reinforced adoptions matter most")
-            print(f"  • For δ > {delta_star:.4f}: Random networks outperform")
-            print(f"    → Network reach is more valuable")
-            print(f"    → Spreading widely over time matters most")
+            else:
+                # Single intersection - standard interpretation
+                print(f"\nInterpretation:")
+                print(f"  • For δ < {delta_star:.4f}: Clustered networks outperform")
+                print(f"    → Social reinforcement is more valuable")
+                print(f"    → Early, reinforced adoptions matter most")
+                print(f"  • For δ > {delta_star:.4f}: Random networks outperform")
+                print(f"    → Network reach is more valuable")
+                print(f"    → Spreading widely over time matters most")
         else:
             # δ* was not found in the tested range - provide detailed analysis
             print("\n" + "!"*70)
@@ -718,52 +837,52 @@ def main(k=4, n=None, thrshld=4, p1=0.75, p2=0.75, beta=1, trials=50, seeds=None
 
             # Determine dominant pattern and provide interpretation
             if random_wins == total_tests:
-            # Random network always wins
-            print(f"\n⚠ Analysis: Random network ALWAYS outperforms in tested range")
-            print(f"\nInterpretation:")
-            print(f"  • δ* is likely BELOW the tested range (δ < {delta_values[0]})")
-            print(f"  • OR δ* may not exist for these parameters")
-            print(f"  • Network 'reach' dominates over 'reinforcement' across all tested δ values")
-            print(f"  • Even when valuing early adoptions heavily, random networks spread better")
-            print(f"\n💡 Recommendation:")
-            print(f"  → Test LOWER delta values: try [0.01, 0.02, 0.05, 0.1, ...]")
-            print(f"  → If δ* exists, it's in the extreme early-adoption regime")
+                # Random network always wins
+                print(f"\n⚠ Analysis: Random network ALWAYS outperforms in tested range")
+                print(f"\nInterpretation:")
+                print(f"  • δ* is likely BELOW the tested range (δ < {delta_values[0]})")
+                print(f"  • OR δ* may not exist for these parameters")
+                print(f"  • Network 'reach' dominates over 'reinforcement' across all tested δ values")
+                print(f"  • Even when valuing early adoptions heavily, random networks spread better")
+                print(f"\n💡 Recommendation:")
+                print(f"  → Test LOWER delta values: try [0.01, 0.02, 0.05, 0.1, ...]")
+                print(f"  → If δ* exists, it's in the extreme early-adoption regime")
 
             elif clustered_wins == total_tests:
-            # Clustered network always wins
-            print(f"\n⚠ Analysis: Clustered network ALWAYS outperforms in tested range")
-            print(f"\nInterpretation:")
-            print(f"  • δ* is likely ABOVE the tested range (δ > {delta_values[-1]})")
-            print(f"  • Social 'reinforcement' dominates over 'reach' across all tested δ values")
-            print(f"  • Even when valuing late adoptions equally, clustered networks perform better")
-            print(f"\n💡 Recommendation:")
-            print(f"  → Test HIGHER delta values: try [..., 0.995, 0.999, 0.9999]")
-            print(f"  → If δ* exists, it's in the extreme late-adoption regime")
+                # Clustered network always wins
+                print(f"\n⚠ Analysis: Clustered network ALWAYS outperforms in tested range")
+                print(f"\nInterpretation:")
+                print(f"  • δ* is likely ABOVE the tested range (δ > {delta_values[-1]})")
+                print(f"  • Social 'reinforcement' dominates over 'reach' across all tested δ values")
+                print(f"  • Even when valuing late adoptions equally, clustered networks perform better")
+                print(f"\n💡 Recommendation:")
+                print(f"  → Test HIGHER delta values: try [..., 0.995, 0.999, 0.9999]")
+                print(f"  → If δ* exists, it's in the extreme late-adoption regime")
 
             elif relative_diff < 0.05:
-            # Networks perform very similarly
-            print(f"\n⚠ Analysis: Networks perform VERY SIMILARLY across tested range")
-            print(f"\nInterpretation:")
-            print(f"  • Average difference is only {relative_diff:.2%} - negligible")
-            print(f"  • δ* may not be a meaningful concept for these parameters")
-            print(f"  • Network structure has minimal impact on diffusion performance")
-            print(f"\n💡 Recommendation:")
-            print(f"  → Consider testing different parameter combinations:")
-            print(f"     - Different thresholds (current: i={thrshld})")
-            print(f"     - Different p1/p2 ratios (current: p1={p1}, p2={p2})")
-            print(f"     - Different beta values (current: β={beta})")
+                # Networks perform very similarly
+                print(f"\n⚠ Analysis: Networks perform VERY SIMILARLY across tested range")
+                print(f"\nInterpretation:")
+                print(f"  • Average difference is only {relative_diff:.2%} - negligible")
+                print(f"  • δ* may not be a meaningful concept for these parameters")
+                print(f"  • Network structure has minimal impact on diffusion performance")
+                print(f"\n💡 Recommendation:")
+                print(f"  → Consider testing different parameter combinations:")
+                print(f"     - Different thresholds (current: i={thrshld})")
+                print(f"     - Different p1/p2 ratios (current: p1={p1}, p2={p2})")
+                print(f"     - Different beta values (current: β={beta})")
 
             else:
-            # Mixed results - intersection might be near boundaries
-            print(f"\n⚠ Analysis: Mixed results - performance varies across range")
-            print(f"\nInterpretation:")
-            print(f"  • Both networks win in different regimes, but no clear intersection found")
-            print(f"  • δ* might be very close to one of the tested values")
-            print(f"  • OR the transition is non-monotonic (curves cross multiple times)")
-            print(f"\n💡 Recommendation:")
-            print(f"  → Test with FINER GRANULARITY around transition regions")
-            print(f"  → Current spacing: {delta_values[1]-delta_values[0]:.3f} to {delta_values[-1]-delta_values[-2]:.3f}")
-            print(f"  → Try denser grid: np.linspace({delta_values[0]}, {delta_values[-1]}, 50)")
+                # Mixed results - intersection might be near boundaries
+                print(f"\n⚠ Analysis: Mixed results - performance varies across range")
+                print(f"\nInterpretation:")
+                print(f"  • Both networks win in different regimes, but no clear intersection found")
+                print(f"  • δ* might be very close to one of the tested values")
+                print(f"  • OR the transition is non-monotonic (curves cross multiple times)")
+                print(f"\n💡 Recommendation:")
+                print(f"  → Test with FINER GRANULARITY around transition regions")
+                print(f"  → Current spacing: {delta_values[1]-delta_values[0]:.3f} to {delta_values[-1]-delta_values[-2]:.3f}")
+                print(f"  → Try denser grid: np.linspace({delta_values[0]}, {delta_values[-1]}, 50)")
 
             print("\n" + "!"*70)
 
@@ -777,6 +896,9 @@ def main(k=4, n=None, thrshld=4, p1=0.75, p2=0.75, beta=1, trials=50, seeds=None
             V_random_mean, V_random_se, delta_star, all_intersections
             )
 
+        # Determine dominant network structure
+        dominant_info = determine_dominant_network(V_clustered_mean, V_random_mean, all_intersections)
+
         # Save detailed numerical results to CSV for further analysis
         results_summary = pd.DataFrame({
             'delta': delta_values,
@@ -784,7 +906,13 @@ def main(k=4, n=None, thrshld=4, p1=0.75, p2=0.75, beta=1, trials=50, seeds=None
             'V_clustered_se': V_clustered_se,
             'V_random_mean': V_random_mean,
             'V_random_se': V_random_se,
-            'difference': V_random_mean - V_clustered_mean  # Positive = random better
+            'difference': V_random_mean - V_clustered_mean,  # Positive = random better
+            # New columns for dominant network analysis
+            'delta_star_count': dominant_info['delta_star_count'],
+            'delta_star_values': dominant_info['delta_star_values'],
+            'dominant_below': dominant_info['dominant_below'],
+            'dominant_above': dominant_info['dominant_above'],
+            'always_dominant': dominant_info['always_dominant']
             })
 
         # Create output directory if it doesn't exist
@@ -800,10 +928,15 @@ def main(k=4, n=None, thrshld=4, p1=0.75, p2=0.75, beta=1, trials=50, seeds=None
         print("ANALYSIS COMPLETE!")
         print("="*70)
 
-    return delta_star, results_summary
+        return delta_star, results_summary, all_intersections
+
+    finally:
+        # Restore stdout if it was redirected
+        if old_stdout is not None:
+            sys.stdout = old_stdout
 
 
 # Execute the analysis when script is run directly (not imported as a module)
 if __name__ == "__main__":
     # Run the complete analysis and store the results
-    delta_star, results = main()
+    delta_star, results, all_ints = main()

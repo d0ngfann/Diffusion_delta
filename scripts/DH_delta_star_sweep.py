@@ -17,7 +17,7 @@ import os
 import sys
 import time
 import itertools
-from datetime import timedelta
+from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
@@ -50,7 +50,7 @@ except ImportError:
             print(msg)
 
 # Import the main analysis function
-from delta_star_analysis import main as run_delta_star_analysis
+from DH_delta_star_analysis import main as run_delta_star_analysis
 
 
 def generate_parameter_combinations():
@@ -63,8 +63,8 @@ def generate_parameter_combinations():
     # Define parameter grids
     k_values = [4, 8, 12]
     thrshld_values = [2, 3, 4]
-    p1_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-    p2_values = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    p1_values = [0.05, 0.1, 0.15]
+    p2_values = list(np.linspace(0.3, 1.0, 30)) 
     beta_values = [1, 3, 5, 7]
 
     # Generate all combinations
@@ -291,35 +291,39 @@ def run_parameter_sweep(combinations, output_dir='../output_data', n_workers=8):
     return df
 
 
-def save_results(df, output_dir='../output_data'):
+def save_results(df, timestamp, output_dir='../output_data'):
     """
     Save results to CSV file.
 
     Parameters:
         df: pd.DataFrame
             Results dataframe
+        timestamp: str
+            Timestamp string for filename (YYYYMMDD_HHMMSS)
         output_dir: str
             Directory to save results
     """
     os.makedirs(output_dir, exist_ok=True)
-    output_file = os.path.join(output_dir, 'sweep_results.csv')
+    output_file = os.path.join(output_dir, f'{timestamp}_sweep_results.csv')
     df.to_csv(output_file, index=False)
     print(f"\n✓ Results saved to: {output_file}")
     return output_file
 
 
-def generate_summary_statistics(df, output_dir='../output_data'):
+def generate_summary_statistics(df, timestamp, output_dir='../output_data'):
     """
     Generate summary statistics and save to text file.
 
     Parameters:
         df: pd.DataFrame
             Results dataframe
+        timestamp: str
+            Timestamp string for filename (YYYYMMDD_HHMMSS)
         output_dir: str
             Directory to save summary
     """
     os.makedirs(output_dir, exist_ok=True)
-    summary_file = os.path.join(output_dir, 'sweep_summary.txt')
+    summary_file = os.path.join(output_dir, f'{timestamp}_sweep_summary.txt')
 
     with open(summary_file, 'w') as f:
         f.write("="*70 + "\n")
@@ -405,13 +409,103 @@ def generate_summary_statistics(df, output_dir='../output_data'):
     return summary_file
 
 
-def create_visualizations(df, output_dir='../output_plots/sweep_plots'):
+def save_parameter_info(combinations, timestamp, n_workers, output_dir='../output_data'):
+    """
+    Save parameter grid information to text file.
+
+    Parameters:
+        combinations: list of dicts
+            Parameter combinations used in the sweep
+        timestamp: str
+            Timestamp string for filename (YYYYMMDD_HHMMSS)
+        n_workers: int
+            Number of parallel workers used
+        output_dir: str
+            Directory to save parameter info
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    param_file = os.path.join(output_dir, f'{timestamp}_parameters.txt')
+
+    # Extract unique values for each parameter
+    k_values = sorted(set(c['k'] for c in combinations))
+    thrshld_values = sorted(set(c['thrshld'] for c in combinations))
+    p1_values = sorted(set(c['p1'] for c in combinations))
+    p2_values = sorted(set(c['p2'] for c in combinations))
+    beta_values = sorted(set(c['beta'] for c in combinations))
+
+    # Get trials from first combination (all have same trials value)
+    trials = 50  # Default from run_single_combination
+
+    with open(param_file, 'w') as f:
+        f.write("="*70 + "\n")
+        f.write("PARAMETER SWEEP CONFIGURATION\n")
+        f.write("="*70 + "\n\n")
+
+        # Execution time
+        exec_time = datetime.strptime(timestamp, '%Y%m%d_%H%M%S')
+        f.write(f"Execution Time: {exec_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Timestamp: {timestamp}\n\n")
+
+        # Parameter ranges
+        f.write("PARAMETER RANGES\n")
+        f.write("-"*70 + "\n")
+        f.write(f"Network Degree (k): {k_values}\n")
+        f.write(f"  → {len(k_values)} values\n\n")
+
+        f.write(f"Threshold (thrshld/i): {thrshld_values}\n")
+        f.write(f"  → {len(thrshld_values)} values\n\n")
+
+        f.write(f"Base Probability (p1): {p1_values}\n")
+        f.write(f"  → {len(p1_values)} values\n\n")
+
+        f.write(f"Reinforced Probability (p2): {p2_values}\n")
+        f.write(f"  → {len(p2_values)} values\n\n")
+
+        f.write(f"Time of Influence (beta): {beta_values}\n")
+        f.write(f"  → {len(beta_values)} values\n\n")
+
+        # Execution parameters
+        f.write("EXECUTION PARAMETERS\n")
+        f.write("-"*70 + "\n")
+        f.write(f"Trials per combination: {trials}\n")
+        f.write(f"Parallel workers: {n_workers}\n")
+        f.write(f"Network size (n): k × 250 nodes\n\n")
+
+        # Combination statistics
+        f.write("COMBINATION STATISTICS\n")
+        f.write("-"*70 + "\n")
+        f.write(f"Total parameter combinations: {len(combinations)}\n")
+        f.write(f"  (Only combinations with p1 ≤ p2 are included)\n\n")
+
+        f.write(f"Theoretical maximum: {len(k_values) * len(thrshld_values) * len(p1_values) * len(p2_values) * len(beta_values)}\n")
+        f.write(f"Valid combinations: {len(combinations)}\n")
+        f.write(f"Filtered out: {len(k_values) * len(thrshld_values) * len(p1_values) * len(p2_values) * len(beta_values) - len(combinations)} (p1 > p2)\n\n")
+
+        # Additional notes
+        f.write("NOTES\n")
+        f.write("-"*70 + "\n")
+        f.write("• seeds = threshold (i) for all combinations\n")
+        f.write("• Network type: Watts-Strogatz (WS)\n")
+        f.write("• Seeding strategy: one_nbrs for clustered, random for random\n")
+        f.write("• Delta values tested: np.linspace(0, 1, 1001)\n")
+        f.write("• Minimum delta threshold: 0.0001\n")
+        f.write("• Full spread threshold: 60% of population\n\n")
+
+        f.write("="*70 + "\n")
+
+    print(f"✓ Parameter info saved to: {param_file}")
+    return param_file
+
+
+def create_visualizations(df, timestamp, output_dir='../output_plots/sweep_plots'):
     """
     Create visualization plots for the sweep results.
 
     Parameters:
         df: pd.DataFrame
             Results dataframe
+        timestamp: str
+            Timestamp string for filename (YYYYMMDD_HHMMSS)
         output_dir: str
             Directory to save plots
     """
@@ -457,7 +551,7 @@ def create_visualizations(df, output_dir='../output_plots/sweep_plots'):
     ax.set_xlabel('Threshold (i)', fontweight='bold')
     ax.set_ylabel('Network Degree (k)', fontweight='bold')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'heatmap_k_vs_thrshld.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'{timestamp}_heatmap_k_vs_thrshld.png'), dpi=300)
     plt.close()
 
     # 2. Scatter plot: p1 vs p2
@@ -488,7 +582,7 @@ def create_visualizations(df, output_dir='../output_plots/sweep_plots'):
     ax.legend(scatterpoints=1, frameon=True, labelspacing=1, title='Time of Influence')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'scatter_p1_vs_p2.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'{timestamp}_scatter_p1_vs_p2.png'), dpi=300)
     plt.close()
 
     # 3. Box plot: beta vs delta_star
@@ -501,7 +595,7 @@ def create_visualizations(df, output_dir='../output_plots/sweep_plots'):
     plt.suptitle('')  # Remove default title
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'boxplot_beta.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'{timestamp}_boxplot_beta.png'), dpi=300)
     plt.close()
 
     # 4. Pie chart: status distribution
@@ -521,7 +615,7 @@ def create_visualizations(df, output_dir='../output_plots/sweep_plots'):
     )
     ax.set_title('Distribution of Sweep Results', fontweight='bold', fontsize=14)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'pie_chart_status.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, f'{timestamp}_pie_chart_status.png'), dpi=300)
     plt.close()
 
     print(f"\n✓ Visualizations saved to: {output_dir}/")
@@ -531,35 +625,48 @@ def main():
     """
     Main function to run the complete parameter sweep.
     """
+    # Generate timestamp for this run
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
     print("="*70)
     print("DELTA-STAR PARAMETER SWEEP")
     print("Systematic exploration of parameter space")
     print("="*70)
+    print(f"\nRun Timestamp: {timestamp}")
+    print(f"  ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
 
     # Generate parameter combinations
     print("\nGenerating parameter combinations...")
     combinations = generate_parameter_combinations()
     print(f"✓ Generated {len(combinations)} valid combinations (p₁ ≤ p₂)")
 
+    # Get number of workers
+    n_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
+
+    # Save parameter information
+    print("\nSaving parameter configuration...")
+    save_parameter_info(combinations, timestamp, n_workers)
+
     # Run the sweep
-    results_df = run_parameter_sweep(combinations)
+    results_df = run_parameter_sweep(combinations, n_workers=n_workers)
 
     # Save results
-    save_results(results_df)
+    save_results(results_df, timestamp)
 
     # Generate summary statistics
-    generate_summary_statistics(results_df)
+    generate_summary_statistics(results_df, timestamp)
 
     # Create visualizations
-    create_visualizations(results_df)
+    create_visualizations(results_df, timestamp)
 
     print("\n" + "="*70)
     print("SWEEP COMPLETE!")
     print("="*70)
-    print(f"\nFiles created:")
-    print(f"  - ../output_data/sweep_results.csv")
-    print(f"  - ../output_data/sweep_summary.txt")
-    print(f"  - ../output_plots/sweep_plots/*.png")
+    print(f"\nFiles created (timestamp: {timestamp}):")
+    print(f"  - ../output_data/{timestamp}_parameters.txt")
+    print(f"  - ../output_data/{timestamp}_sweep_results.csv")
+    print(f"  - ../output_data/{timestamp}_sweep_summary.txt")
+    print(f"  - ../output_plots/sweep_plots/{timestamp}_*.png")
     print()
 
 
