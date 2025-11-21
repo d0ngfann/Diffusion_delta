@@ -305,7 +305,7 @@ def save_results(df, timestamp, output_dir='../output_data'):
     """
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, f'{timestamp}_sweep_results.csv')
-    df.to_csv(output_file, index=False)
+    df.to_csv(output_file, index=False, encoding='utf-8')
     print(f"\n✓ Results saved to: {output_file}")
     return output_file
 
@@ -325,7 +325,7 @@ def generate_summary_statistics(df, timestamp, output_dir='../output_data'):
     os.makedirs(output_dir, exist_ok=True)
     summary_file = os.path.join(output_dir, f'{timestamp}_sweep_summary.txt')
 
-    with open(summary_file, 'w') as f:
+    with open(summary_file, 'w', encoding='utf-8') as f:
         f.write("="*70 + "\n")
         f.write("DELTA-STAR PARAMETER SWEEP SUMMARY\n")
         f.write("="*70 + "\n\n")
@@ -436,7 +436,7 @@ def save_parameter_info(combinations, timestamp, n_workers, output_dir='../outpu
     # Get trials from first combination (all have same trials value)
     trials = 50  # Default from run_single_combination
 
-    with open(param_file, 'w') as f:
+    with open(param_file, 'w', encoding='utf-8') as f:
         f.write("="*70 + "\n")
         f.write("PARAMETER SWEEP CONFIGURATION\n")
         f.write("="*70 + "\n\n")
