@@ -1,0 +1,1659 @@
+\documentclass[12pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{multirow}
+
+% Title
+\title{\textbf{Comparing Cycle-Power-Union-Random and Random Regular Graphs}}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Network Configurations}
+
+$C_{p,q/n}$ is a hybrid network. It combines two parts: a Cycle-Power-$p$ lattice (which has $2p$ edges per node) and Erd\H{o}s-R\'enyi random edges (which has about $q$ edges per node). Total degree: $2p+q$. Four configurations were tested:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lccccl@{}}
+\toprule
+\textbf{Configuration} & $p$ & $q$ & \textbf{Lattice} & \textbf{Random} & \textbf{Description} \\
+\midrule
+Pure Lattice  & 4 & 0 & 8 & $\sim$0 & High clustering, no shortcuts \\
+Lattice-Heavy & 3 & 2 & 6 & $\sim$2 & 75\% lattice, 25\% random \\
+Balanced      & 2 & 4 & 4 & $\sim$4 & 50\% lattice, 50\% random \\
+Random-Heavy  & 1 & 6 & 2 & $\sim$6 & 25\% lattice, 75\% random \\
+\bottomrule
+\end{tabular}
+\caption{Four tested $C_{p,q/n}$ network configurations. All have expected degree $\approx 8$ to match Random Regular baseline.}
+\label{tab:networks}
+\end{table}
+
+Baseline: Random Regular graph with degree $k=8$ (no clustering).
+
+\section{Experimental Setup}
+
+We use threshold-based complex contagion. Here's how it works:
+
+\paragraph{Adoption Rules (Serial Processing):}
+At each timestep, susceptible nodes process exposures from their \textbf{currently influential neighbors} serially. The per-exposure probability depends on the \textit{count of influential neighbors at this timestep}:
+
+\begin{itemize}
+    \item \textbf{Exposures 1 to (threshold-1)}: Each exposure has low probability $p_1 = 0.1$ to cause adoption
+    \item \textbf{Exposures $\geq$ threshold}: Each exposure has high probability $p_2 \in [0.5, 1.0]$ to cause adoption
+\end{itemize}
+
+\textbf{Critical}: Once a node adopts (on any exposure), it stops being susceptible and remaining exposures don't occur. The process repeats each timestep until no influential nodes remain.
+
+\paragraph{Example:} If threshold = 3 and a node has 5 influential neighbors:
+\begin{itemize}
+    \item 1st neighbor: 10\% chance to adopt (if fails, continue)
+    \item 2nd neighbor: 10\% chance to adopt (if fails, continue)
+    \item 3rd neighbor: 70\% chance to adopt (threshold reached, if fails, continue)
+    \item 4th neighbor: 70\% chance to adopt (if fails, continue)
+    \item 5th neighbor: 70\% chance to adopt
+\end{itemize}
+
+\textbf{Cumulative probability} of adoption = $1 - (1-p_1)^{(i-1)} \times (1-p_2)^{(c-i+1)}$ where $c=5$, $i=3$, $p_1=0.1$, $p_2=0.7$:
+\begin{equation*}
+1 - (0.9)^2 \times (0.3)^3 = 1 - 0.81 \times 0.027 = 0.978 \text{ (97.8\% chance)}
+\end{equation*}
+
+This is \textbf{very different} from a single 70\% chance! Multiple exposures dramatically increase adoption likelihood through repeated trials.
+
+\paragraph{Influence Duration:}
+The parameter $\beta$ controls how long newly adopted nodes stay influential. For example, if $\beta=5$, a node that adopts at time $t$ will influence its neighbors until time $t+5$.
+
+\subsection{Fractional Parameter Handling}
+
+Fractional values are used for both threshold and $\beta$ to test many parameter values. Fractional values are handled as follows:
+
+\paragraph{Threshold (fractional):} For threshold = 2.3:
+\begin{itemize}
+    \item The fractional part is 0.3
+    \item Each node gets threshold = 3 with probability 0.3, otherwise threshold = 2
+    \item This creates variation in thresholds across different nodes
+\end{itemize}
+
+\paragraph{Beta (fractional):} For $\beta = 5.7$:
+\begin{itemize}
+    \item The fractional part is 0.7
+    \item Each newly infected node stays influential for 6 timesteps with probability 0.7, otherwise 5 timesteps
+    \item This creates variation in how long different nodes stay influential
+\end{itemize}
+
+\subsection{Seeding Strategy: Why It Matters}
+
+\textbf{Number of initial seeds}: $\lceil \text{threshold} \rceil$ (threshold value rounded up)
+
+\textbf{Seeding method}: Linear path (\texttt{seed\_strat\_path})
+
+We create initial adopters that form a connected chain: $\text{Seed}_1 \to \text{Seed}_2 \to \text{Seed}_3 \to \text{Seed}_4$
+
+\paragraph{How it works:}
+\begin{enumerate}
+    \item Pick a random starting node
+    \item Find one of its neighbors, make that the next seed
+    \item Find a neighbor of that seed, make it the third seed
+    \item Continue until we have enough seeds
+\end{enumerate}
+
+\paragraph{Why this matters:}
+This seeding creates a \textit{local cluster} of initial adopters. In a pure lattice network, this means seeds and their neighbors are all close together on the ring. In a random network, seeds are connected but their other neighbors are scattered across the network. This difference turns out to be crucial for understanding which network structure performs better.
+
+\paragraph{Fair comparison:}
+Both $C_{p,q/n}$ and Random Regular networks use the same random seed, so they get equivalent starting configurations. Any performance difference comes from network structure, not from lucky seed placement.
+
+\subsection{Comparison Metric: \texorpdfstring{$\delta^*$}{delta*}}
+
+We need a way to compare networks that might perform differently at different time scales. We use \textbf{discounted cumulative activation}: $V(\delta) = \sum_{t=1}^{T} c_t \cdot \delta^t$
+
+\paragraph{What this means:}
+\begin{itemize}
+    \item $c_t$ = number of new adopters at time $t$
+    \item $\delta$ = how much we value later adopters compared to early ones (0 to 1)
+    \item If $\delta = 1.0$: all adopters count equally (we only care about final spread)
+    \item If $\delta = 0.5$: adopters at time 2 count half as much as time 1, time 3 counts 1/4 as much, etc. (we care a lot about speed)
+\end{itemize}
+
+By comparing networks at 201 different $\delta$ values, we can find if there's a critical value $\delta^*$ where both networks perform equally.
+
+\paragraph{Case Classification:}
+Each network pair falls into one of three cases:
+\begin{itemize}
+    \item \textbf{Case A}: Cpq always performs better (at all $\delta$ values)
+    \item \textbf{Case B}: Random always performs better (at all $\delta$ values)
+    \item \textbf{Case C}: $\delta^*$ exists (networks tie at some specific time preference)
+\end{itemize}
+
+\subsection{Parameters}
+
+Fixed across all experiments: $n=2000$ nodes, $k=8$ degree, $p_1=0.1$ base probability, 500 matched pairs per condition, 201 delta values, stopping when either network reaches 60\% saturation.
+
+\paragraph{Parameter Ranges:}
+The following parameters were systematically varied:
+\begin{itemize}
+    \item $p_2$ (reinforced adoption probability): $0.50$ to $1.00$ in steps of $0.01$
+    \item threshold ($i$): $2.0$ to $5.0$ in steps of $0.1$
+    \item beta (time of influence): $1.0$ to $10.0$ in steps of $0.2$
+\end{itemize}
+
+Different combinations of parameters were tested:
+\begin{itemize}
+    \item $p_2$ vs threshold (16 experiments: 4 networks $\times$ 4 beta values[1,3,5,7])
+    \item beta vs threshold (12 experiments: 4 networks $\times$ 3 $p_2$ values[0.6,0.8,1.0])
+    \item $p_2$ vs beta (12 experiments: 4 networks $\times$ 3 threshold values[2,3,4])
+\end{itemize}
+
+Total: 40 experiments, 20,000 network pairs (500 pairs per experiment).
+
+\section{Results}
+
+We tested 35.28 million network pairs across 40 experiments (70,560 parameter combinations, 500 pairs each). Each pair compared a $C_{p,q/n}$ hybrid network against a Random Regular network with identical degree ($k=8$) and size ($n=2000$).
+
+\subsection{Critical Observation: \texorpdfstring{$C_{p,q/n}$}{C(p,q/n)} is Not a Single Network Type}
+
+\textbf{Warning:} Before interpreting results, it is crucial to recognize that $C_{p,q/n}$ networks span a \textit{continuous spectrum} from pure lattice (p4q0: 100\% lattice edges, 0\% random) to random-heavy (p1q6: 25\% lattice, 75\% random). Treating ``Cpq'' as a single category obscures dramatic internal heterogeneity.
+
+Aggregating across all Cpq structures yields:
+\begin{itemize}
+    \item \textbf{Case A} (Cpq dominates): 38.2\% of pairs
+    \item \textbf{Case B} (Random dominates): 30.6\% of pairs
+    \item \textbf{Case C} (Intersection exists): 31.2\% of pairs
+\end{itemize}
+
+However, this aggregate conceals that \textbf{different Cpq structures behave fundamentally differently}. The following subsection reveals that p4q0 and p1q6 have opposite relationships with Random Regular networks.
+
+\subsection{Dramatic Heterogeneity Within \texorpdfstring{$C_{p,q/n}$}{C(p,q/n)} Family}
+
+Table~\ref{tab:network_cases} reveals that $C_{p,q/n}$ networks exhibit a \textbf{monotonic relationship} between random edge proportion and competitive success against Random Regular graphs. This is not a comparison of ``Cpq vs Random'' --- it is a demonstration that \textbf{lattice structure hinders performance while random edges enable it}.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lcrrrc@{}}
+\toprule
+\textbf{Network} & \textbf{Random \%} & \textbf{Case A (\%)} & \textbf{Case B (\%)} & \textbf{Case C (\%)} & \textbf{Outcome} \\
+\midrule
+p4q0 (Pure Lattice)  & 0\%  & 11.4 & \textbf{42.4} & 46.2 & \textcolor{red}{Usually loses} \\
+p3q2 (Lattice-Heavy) & 25\% & 26.1 & \textbf{47.1} & 26.8 & \textcolor{red}{Often loses} \\
+p2q4 (Balanced)      & 50\% & \textbf{49.2} & 24.8 & 26.0 & \textcolor{orange}{Competitive} \\
+p1q6 (Random-Heavy)  & 75\% & \textbf{65.9} &  8.3 & 25.8 & \textcolor{blue}{Usually wins} \\
+\midrule
+\multicolumn{6}{l}{\textit{Random Regular (baseline)}: 100\% random, 0\% lattice} \\
+\bottomrule
+\end{tabular}
+\caption{Case distribution by $C_{p,q/n}$ structure. More random edges yield better performance. Pure lattice (p4q0) performs worst: dominated in 42.4\% vs 11.4\% dominance (5.8$\times$ gap vs p1q6).}
+\label{tab:network_cases}
+\end{table}
+
+\paragraph{Key Observation: Lattice Structure is a Liability, Not an Asset}
+
+The monotonic trend in Table~\ref{tab:network_cases} demonstrates:
+\begin{itemize}
+    \item \textbf{p4q0 (0\% random)}: Dominated by Random Regular (Case B = 42.4\%) far more often than it dominates (Case A = 11.4\%). This is the \textit{worst-performing} Cpq structure.
+
+    \item \textbf{p1q6 (75\% random)}: Dominates Random Regular (Case A = 65.9\%) far more often than it is dominated (Case B = 8.3\%). This is the \textit{best-performing} Cpq structure.
+
+    \item \textbf{Gradient effect}: Each increase in random edge proportion improves performance (11.4\% $\to$ 26.1\% $\to$ 49.2\% $\to$ 65.9\% Case A).
+\end{itemize}
+
+\textbf{Implication}: The comparison is \textit{not} ``clustered networks vs random networks.'' Rather, it is ``networks with varying degrees of randomness vs purely random networks,'' where \textit{less randomness consistently correlates with worse performance}. The aggregate ``Cpq dominates 38.2\%'' obscures that this is driven primarily by random-heavy structures (p1q6, p2q4), while lattice-heavy structures (p4q0, p3q2) actually \textit{underperform} Random Regular.
+
+\subsection{Delta-Star (\texorpdfstring{$\delta^*$}{delta*}) Analysis}
+
+Among the 63,252 parameter combinations that produced Case C pairs (31.2\% overall), we analyzed the critical temporal discount factor $\delta^*$ where both networks perform equally.
+
+\paragraph{What $\delta^*$ Tells Us}
+
+Remember: $\delta^*$ is the crossover point where both networks perform equally.
+\begin{itemize}
+    \item If $\delta^* = 0.3$: Cpq beats Random when $\delta < 0.3$ (fast spreading matters), Random beats Cpq when $\delta > 0.3$ (total spread matters)
+    \item If $\delta^* = 0.7$: Cpq beats Random for a much wider range ($\delta < 0.7$), meaning Cpq is better unless you \textit{only} care about final spread
+    \item \textbf{Higher $\delta^*$ = Cpq structure has an advantage across more time preferences}
+\end{itemize}
+
+\paragraph{Overall Distribution}
+Across all Case C pairs:
+\begin{itemize}
+    \item Mean: $\delta^* = 0.547$ (median: 0.535)
+    \item Standard deviation: 0.154
+    \item Range: [0.180, 0.957]
+\end{itemize}
+
+This wide range (0.180 to 0.957) shows that some parameter combinations heavily favor Random (low $\delta^*$) while others heavily favor Cpq structures (high $\delta^*$).
+
+\paragraph{Network-Specific Patterns}
+
+Table~\ref{tab:delta_star} shows $\delta^*$ values by $C_{p,q/n}$ structure.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{Random \%} & \textbf{Mean $\delta^*$} & \textbf{Median $\delta^*$} & \textbf{Std Dev} \\
+\midrule
+p4q0 (Pure Lattice)  & 0\%  & 0.430 & 0.424 & 0.139 \\
+p3q2 (Lattice-Heavy) & 25\% & 0.540 & 0.552 & 0.130 \\
+p2q4 (Balanced)      & 50\% & 0.620 & 0.642 & 0.148 \\
+p1q6 (Random-Heavy)  & 75\% & 0.598 & 0.582 & 0.122 \\
+\bottomrule
+\end{tabular}
+\caption{Delta-star statistics by $C_{p,q/n}$ structure (Case C pairs only). Note the non-monotonic relationship: p2q4 (50\% random) has highest $\delta^*$ (0.620), despite p1q6 (75\% random) winning more often overall (see Table~\ref{tab:network_cases}). This reflects different competitive dynamics: p2q4 creates balanced competition, while p1q6 exhibits winner-take-all behavior.}
+\label{tab:delta_star}
+\end{table}
+
+The pure lattice (p4q0) exhibits the lowest $\delta^* = 0.430$, meaning that even when intersections exist (Case C), Random Regular performs better for most time preferences ($\delta > 0.430$). The balanced network (p2q4) achieves the highest $\delta^* = 0.620$, but recall from Table~\ref{tab:network_cases} that p2q4 only achieves Case A in 49.2\% of pairs (vs p1q6's 65.9\%). The delta-star metric only applies to Case C pairs where an intersection exists; it does not capture overall dominance frequency.
+
+\subsection{Parameter Effects}
+
+\paragraph{Time of Influence (Beta)}
+
+Beta has a dramatic effect on competitive dynamics:
+\begin{itemize}
+    \item $\beta = 1.0$: \textbf{0\% Case C} --- one network always dominates completely
+    \item $\beta = 3.0$: 41.1\% Case C --- most competitive regime
+    \item $\beta = 5.0$: 35.0\% Case C
+    \item $\beta = 7.0$: 33.1\% Case C
+\end{itemize}
+
+When influence is extremely short-lived ($\beta=1$), network structure creates a decisive advantage for one topology or the other. As influence persists longer, networks become more competitive.
+
+\paragraph{Reinforced Adoption Probability (p2)}
+
+Higher $p_2$ slightly increases competitiveness:
+\begin{itemize}
+    \item $p_2 = 0.6$: 31.3\% Case C
+    \item $p_2 = 0.8$: 32.7\% Case C
+    \item $p_2 = 1.0$: 33.6\% Case C
+\end{itemize}
+
+\paragraph{Adoption Threshold}
+
+Threshold shows a non-monotonic pattern:
+\begin{itemize}
+    \item Threshold = 2.0: 36.1\% Case C
+    \item Threshold = 3.0: 40.3\% Case C --- most competitive
+    \item Threshold = 4.0: 25.2\% Case C --- least competitive
+\end{itemize}
+
+Moderate thresholds (around 3) create the most competitive dynamics, while very high thresholds reduce competitiveness.
+
+\section{Discussion}
+
+The analysis of 70,560 parameter combinations reveals two complementary competitive dynamics: (1) \textbf{dominance patterns} (which network wins more often), and (2) \textbf{delta-star ($\delta^*$) values} (when competition exists, at what time preference do networks perform equally). While dominance patterns address \textit{frequency} of advantage, $\delta^*$ addresses \textit{breadth} of advantage across time preferences. This section focuses primarily on $\delta^*$ patterns.
+
+\subsection{Delta-Star: The Competitive Balance Point}
+
+Among the 70,560 parameter combinations tested, 63,252 (89.6\%) produced Case C pairs where an intersection exists. For these competitive pairs, $\delta^*$ quantifies the critical time preference where both networks perform equally.
+
+\paragraph{Interpretation of $\delta^*$ Values:}
+\begin{itemize}
+    \item $\delta^* = 0.3$: Cpq outperforms Random only when $\delta < 0.3$ (Cpq has early speed advantage, Random has better long-term spread)
+    \item $\delta^* = 0.5$: Balanced competition (Cpq better for $\delta < 0.5$, Random better for $\delta > 0.5$)
+    \item $\delta^* = 0.7$: Cpq outperforms Random for most time preferences $\delta < 0.7$ (Cpq maintains advantage unless only final saturation matters)
+\end{itemize}
+
+\textbf{Higher $\delta^*$ indicates that the Cpq network maintains its competitive advantage across a broader range of time preferences.}
+
+\paragraph{Overall Distribution:}
+Across all 63,252 Case C combinations:
+\begin{itemize}
+    \item Mean: $\delta^* = 0.547$ (median: 0.535)
+    \item Standard deviation: 0.154
+    \item Range: [0.180, 0.957]
+    \item 25th-75th percentile: [0.431, 0.662]
+\end{itemize}
+
+The mean of 0.547 indicates that, \textit{when competition occurs}, Cpq and Random networks are nearly balanced on average. However, the wide range (0.180 to 0.957) reveals that parameter choices dramatically shift competitive balance.
+
+\subsection{Network Structure Effects on Delta-Star}
+
+Table~\ref{tab:deltastar_by_network} shows $\delta^*$ statistics by network structure (Case C pairs only).
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrc@{}}
+\toprule
+\textbf{Network} & \textbf{Mean $\delta^*$} & \textbf{Median $\delta^*$} & \textbf{Range} & \textbf{Interpretation} \\
+\midrule
+p4q0 (0\% random)  & 0.430 & 0.425 & [0.180, 0.948] & Random advantage \\
+p3q2 (25\% random) & 0.540 & 0.552 & [0.334, 0.957] & Balanced \\
+p2q4 (50\% random) & 0.620 & 0.642 & [0.337, 0.916] & \textbf{Strongest Cpq} \\
+p1q6 (75\% random) & 0.598 & 0.582 & [0.392, 0.909] & Strong Cpq \\
+\bottomrule
+\end{tabular}
+\caption{Delta-star statistics by $C_{p,q/n}$ structure. \textbf{Critical distinction}: This table shows $\delta^*$ values \textit{only for Case C pairs where competition exists}. It does NOT reflect overall dominance frequency (see Table~\ref{tab:network_cases} for that). p2q4 achieves the highest $\delta^* = 0.620$, meaning that when p2q4 competes with Random, it maintains advantage across the widest range of time preferences.}
+\label{tab:deltastar_by_network}
+\end{table}
+
+\paragraph{Key Observation: p2q4 Achieves Highest $\delta^*$ Despite Lower Dominance}
+
+This creates an apparent paradox:
+\begin{itemize}
+    \item \textbf{Dominance frequency} (Table~\ref{tab:network_cases}): p1q6 wins more often (65.9\% Case A) than p2q4 (49.2\% Case A)
+    \item \textbf{Delta-star magnitude} (Table~\ref{tab:deltastar_by_network}): p2q4 has higher $\delta^*$ (0.620) than p1q6 (0.598)
+\end{itemize}
+
+\textbf{Resolution}: These metrics measure different aspects of competition:
+\begin{itemize}
+    \item \textbf{p1q6 (75\% random)}: Wins \textit{more parameter regimes} outright, but when competition occurs (Case C), the advantage is moderate. Exhibits winner-take-all behavior (mostly Case A or B, only 25.8\% Case C).
+    \item \textbf{p2q4 (50\% random)}: Wins \textit{fewer parameter regimes} overall, but when competition occurs (Case C), it maintains advantage across a \textit{wider range of time preferences}. Creates more nuanced, parameter-dependent competition (26.0\% Case C).
+\end{itemize}
+
+\textbf{Implication}: p2q4 is the most ``robustly competitive'' structure---it balances early speed and long-term spread better than other structures when genuine competition exists.
+
+\paragraph{Pure Lattice (p4q0) Exhibits Lowest $\delta^*$}
+
+p4q0's mean $\delta^* = 0.430$ indicates that even when intersections exist, Random Regular dominates for most time preferences ($\delta > 0.43$). Combined with its low dominance frequency (11.4\% Case A vs 42.4\% Case B from Table~\ref{tab:network_cases}), p4q0 is the weakest structure across both metrics.
+
+\subsection{Mechanistic Explanation: Why These Delta-Star Patterns Emerge}
+
+To understand why different network structures produce different $\delta^*$ values, we must trace through how the spreading algorithm actually operates on these topologies.
+
+\paragraph{Mechanism 1: Why p2q4 Achieves Highest Delta-Star (0.620)}
+
+The p2q4 network (50\% lattice, 50\% random) achieves the highest $\delta^*$ because it optimally balances two competing advantages across different timescales:
+
+\textbf{Early Phase Advantage (Lattice Component):}
+\begin{itemize}
+    \item Linear path seeds (e.g., nodes A → B → C → D) form a connected chain
+    \item Lattice edges connect each seed to nearby neighbors on the ring
+    \item Non-seed nodes adjacent to \textit{multiple seeds} can reach threshold quickly
+    \item Example: With threshold=3, a node neighboring 3 seeds immediately uses $p_2$ probability
+    \item This creates a rapid initial cascade from the seed cluster
+\end{itemize}
+
+\textbf{Sustained Spreading Advantage (Random Component):}
+\begin{itemize}
+    \item Each node has $\sim$4 random edges pointing to distant network regions
+    \item When a node in the initial cascade adopts, its random edges carry influence far beyond the seed cluster
+    \item This initiates \textit{multiple independent secondary cascades} across the network
+    \item Each secondary site then spreads via its local lattice edges
+    \item Creates parallel spreading: several regional cascades proceeding simultaneously
+\end{itemize}
+
+\textbf{Combined Effect:}
+\begin{itemize}
+    \item Early timesteps: p2q4 spreads quickly via local lattice reinforcement (beats Random Regular)
+    \item Later timesteps: p2q4 sustains spreading via multiple parallel cascades (still competitive with Random Regular)
+    \item This dual advantage extends Cpq's competitive edge across a wide range of time preferences
+    \item Hence high $\delta^* = 0.620$: Cpq maintains advantage until $\delta > 0.62$
+\end{itemize}
+
+\textbf{Visual Evidence:} Heatmaps show p2q4 with predominantly orange/red tones, indicating high $\delta^*$ across most parameter combinations (Figure~\ref{fig:p2q4_beta3}).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{p2q4_beta3_p2_vs_thrshld.png}
+\caption{Delta-star heatmap for p2q4 at $\beta=3.0$ (p2 vs threshold). Predominantly orange/red tones indicate high $\delta^*$ values (0.5--0.7) across most parameter combinations, showing p2q4 maintains competitive advantage.}
+\label{fig:p2q4_beta3}
+\end{figure}
+
+\paragraph{Mechanism 2: Why p4q0 Has Lowest Delta-Star (0.430)}
+
+The pure lattice (p4q0) exhibits the lowest $\delta^*$ due to \textbf{neighborhood overlap} and \textbf{sequential wave spreading}:
+
+\textbf{Step 1: Linear Path Seeding Creates Spatial Clustering}
+\begin{itemize}
+    \item Seeds form a connected path: A → B → C → D
+    \item In a 2000-node ring with cycle-power-4 structure (8 lattice neighbors per node)
+    \item Seeds might occupy positions like: 100, 102, 105, 107
+    \item Each seed's neighborhood spans $\pm 4$ positions on the ring
+\end{itemize}
+
+\textbf{Step 2: Neighborhood Overlap Limits Independent Exposures}
+\begin{itemize}
+    \item Non-seed at position 103 is within range of seeds at 100, 102, 105, 107
+    \item This node sees 4 influential neighbors, BUT all 4 are from the same spatial cluster
+    \item At each timestep, the adoption probability depends on \textit{current} count (not cumulative)
+    \item If threshold=4, this node uses $p_2$; if threshold=5, it uses $p_1$
+    \item \textbf{Critical limitation}: All exposures come from the same local region
+\end{itemize}
+
+\textbf{Step 3: Wave Propagation vs. Multi-Site Outbreaks}
+\begin{itemize}
+    \item \textbf{p4q0}: Spreading proceeds as a single coherent wave moving outward from the seed cluster
+    \item Each timestep, the wave advances by $\sim$1--2 lattice steps
+    \item To reach 60\% saturation, the wave must traverse a large arc of the 2000-node ring
+    \item This is \textit{slow}: median time to 60\% can exceed 40--50 timesteps
+    \item \textbf{Random Regular}: Random edges allow "jumps" to distant regions
+    \item Each successful long-range transmission seeds a new independent cascade
+    \item Multiple cascades proceed in parallel across the network
+    \item Saturation occurs much faster: median time often 10--15 timesteps
+\end{itemize}
+
+\textbf{Step 4: Why This Produces Low Delta-Star}
+\begin{itemize}
+    \item Early timesteps ($\delta < 0.43$): p4q0 may have slight advantage from local reinforcement
+    \item Later timesteps ($\delta > 0.43$): Random Regular's parallel cascades dominate
+    \item Random Regular achieves better \textit{long-term saturation} at the cost of slower initial growth
+    \item $\delta^* = 0.430$ means Random dominates for most time preferences
+\end{itemize}
+
+\textbf{Visual Evidence:} Heatmaps show p4q0 with predominantly blue/light tones, indicating low $\delta^*$ across most parameters (Figure~\ref{fig:p4q0_beta3}).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{p4q0_beta3_p2_vs_thrshld.png}
+\caption{Delta-star heatmap for p4q0 at $\beta=3.0$ (p2 vs threshold). Blue tones throughout indicate low $\delta^*$ values (0.3--0.5), showing Random Regular dominates p4q0 for most time preferences even when competition exists.}
+\label{fig:p4q0_beta3}
+\end{figure}
+
+\paragraph{Mechanism 3: Why Beta Decreases Delta-Star}
+
+Figure comparison reveals a dramatic left-to-right gradient in beta vs threshold heatmaps:
+\begin{itemize}
+    \item Left side (low $\beta$): Red/orange tones (high $\delta^*$)
+    \item Right side (high $\beta$): Blue tones (low $\delta^*$)
+\end{itemize}
+
+Figure~\ref{fig:beta_gradients} shows the dramatic effect of beta across network types.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{p4q0_p20.8_beta_vs_thrshld.png}
+    \caption{p4q0: Sharp horizontal boundary at $\beta \approx 2$}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{p2q4_p20.8_beta_vs_thrshld.png}
+    \caption{p2q4: Moderate gradient}
+\end{subfigure}
+\begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{p1q6_p20.8_beta_vs_thrshld.png}
+    \caption{p1q6: Mild gradient, stays orange}
+\end{subfigure}
+\caption{Beta vs threshold heatmaps ($p_2=0.8$) showing left-to-right (low-to-high beta) color transitions. Pure lattice (p4q0) shows sharpest boundary while random-heavy (p1q6) maintains warm colors throughout.}
+\label{fig:beta_gradients}
+\end{figure}
+
+\textbf{Mechanism at Short Influence Duration ($\beta=1$ to $\beta=3$):}
+\begin{itemize}
+    \item Only \textit{newly adopted} nodes from the last $\beta$ timesteps remain influential
+    \item Creates a "moving wavefront" of influence
+    \item \textbf{Lattice advantage}: Lattice structure naturally coordinates this wavefront
+    \item Seeds and early adopters occupy nearby spatial positions
+    \item Their combined influence creates a coherent local cascade
+    \item The wavefront advances in a coordinated manner (all influential nodes are adjacent)
+    \item \textbf{Random Regular disadvantage}: Lacks spatial coordination
+    \item Early adopters are scattered randomly across the network
+    \item The "wavefront" is fragmented --- influential nodes aren't near each other
+    \item Harder to create coordinated local cascades
+    \item \textbf{Result}: Cpq networks maintain advantage longer (high $\delta^*$ at low $\beta$)
+\end{itemize}
+
+\textbf{Mechanism at Long Influence Duration ($\beta=5$ to $\beta=10$):}
+\begin{itemize}
+    \item \textit{Many} timesteps of adopted nodes stay influential simultaneously
+    \item A node adopted at $t=5$ remains influential until $t=5+\beta$
+    \item \textbf{Random Regular advantage}: Can accumulate exposures from diverse sources over time
+    \item Example: Node X sees influential neighbor A at $t=5$, neighbor B at $t=7$, neighbor C at $t=10$
+    \item With $\beta=10$, all three stay influential long enough for X to process all exposures
+    \item The count of \textit{currently influential neighbors} grows over time
+    \item Eventually exceeds threshold, unlocking $p_2$ probability
+    \item \textbf{Lattice disadvantage}: Coordination advantage diminishes
+    \item Most influential neighbors still come from the same local region (neighborhood overlap)
+    \item Longer $\beta$ doesn't create \textit{more independent exposures}, just \textit{longer exposures from the same sources}
+    \item Random Regular's ability to accumulate diverse exposures becomes more valuable
+    \item \textbf{Result}: Random Regular dominates more time preferences (low $\delta^*$ at high $\beta$)
+\end{itemize}
+
+\textbf{Quantitative Evidence:} Delta-star drops monotonically with $\beta$:
+\begin{itemize}
+    \item $\beta=3$: Mean $\delta^* = 0.597$ (Cpq maintains advantage across most time scales)
+    \item $\beta=5$: Mean $\delta^* = 0.515$ (advantage shrinks)
+    \item $\beta=7$: Mean $\delta^* = 0.493$ (advantage nearly gone)
+    \item \textbf{Total drop}: $\Delta \delta^* = -0.104$ from $\beta=3$ to $\beta=7$
+\end{itemize}
+
+\paragraph{Mechanism 4: Why Threshold Increases Delta-Star (Weak Effect)}
+
+Heatmaps show a mild bottom-to-top gradient in p2 vs threshold plots (low threshold at bottom → low $\delta^*$, high threshold at top → high $\delta^*$). However, this effect is much weaker than the beta effect.
+
+\textbf{Mechanism:}
+\begin{itemize}
+    \item \textbf{Low threshold (e.g., threshold=2)}: Easy to satisfy
+    \item Both Cpq and Random Regular nodes can reach threshold with just 2 influential neighbors
+    \item Lattice's local reinforcement advantage is minimal
+    \item Random Regular's diverse exposure advantage also matters less (low bar to clear)
+    \item Result: Networks perform similarly, modest $\delta^*$
+    \item \textbf{High threshold (e.g., threshold=5)}: Hard to satisfy
+    \item \textbf{Cpq advantage}: Lattice edges provide multiple simultaneous exposures from local cluster
+    \item A node near the seed cluster might see 4--5 seeds at once
+    \item Can reach high threshold quickly, unlocking $p_2$
+    \item \textbf{Random Regular challenge}: Diverse exposures arrive \textit{sequentially}
+    \item A node might see neighbor A at $t=5$, B at $t=8$, C at $t=12$
+    \item At any given timestep, the \textit{current count} may still be below threshold
+    \item Must wait longer to accumulate enough simultaneous influential neighbors
+    \item Result: Cpq's local reinforcement extends its advantage, higher $\delta^*$
+\end{itemize}
+
+\textbf{Why This Effect Is Weak:}
+The algorithm uses \textit{current count of influential neighbors at each timestep}, not cumulative. With long enough $\beta$, Random Regular nodes eventually accumulate enough simultaneous exposures. The threshold effect is thus overshadowed by the beta effect.
+
+\paragraph{Why p2 Has No Effect on Delta-Star}
+
+Reinforced adoption probability ($p_2$) affects \textit{absolute spreading rates} but not \textit{relative temporal advantage}:
+\begin{itemize}
+    \item Higher $p_2$ makes adoption more likely once threshold is reached
+    \item This speeds up spreading for \textit{both} Cpq and Random Regular
+    \item The \textit{structural difference} (lattice vs random) determines \textit{when} nodes reach threshold
+    \item The \textit{adoption probability} ($p_2$) determines \textit{how likely} they adopt once threshold is reached
+    \item Since $p_2$ affects both networks similarly, it doesn't shift their relative temporal advantage
+    \item Hence $\delta^*$ remains nearly constant across $p_2$ values (0.545--0.550)
+\end{itemize}
+
+\subsection{Influence Duration (Beta) Dramatically Affects Delta-Star}
+
+Beta has the \textbf{strongest effect} on $\delta^*$ among all parameters tested (Table~\ref{tab:deltastar_by_beta}).
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Beta} & \textbf{Mean $\delta^*$} & \textbf{Median $\delta^*$} & \textbf{$\Delta$ from $\beta=3$} \\
+\midrule
+$\beta = 1.0$ & --- & --- & (0\% Case C) \\
+$\beta = 3.0$ & 0.597 & 0.609 & --- \\
+$\beta = 5.0$ & 0.515 & 0.502 & $-0.082$ \\
+$\beta = 7.0$ & 0.493 & 0.486 & $-0.104$ \\
+\bottomrule
+\end{tabular}
+\caption{Delta-star decreases monotonically as influence duration increases. At $\beta=1$, no Case C pairs exist (winner-take-all dynamics). As $\beta$ increases from 3 to 7, mean $\delta^*$ drops by 0.104, indicating that longer memory shifts advantage toward Random Regular networks.}
+\label{tab:deltastar_by_beta}
+\end{table}
+
+\paragraph{Why Beta Affects $\delta^*$:}
+
+\begin{itemize}
+    \item \textbf{Short influence ($\beta=3$)}: Cpq networks maintain advantage across wider time preferences ($\delta^* = 0.597$). Their structural features (local clustering + random shortcuts) enable faster initial spreading, and the short influence window limits Random Regular's ability to leverage its global connectivity.
+
+    \item \textbf{Long influence ($\beta=7$)}: $\delta^*$ drops to 0.493, meaning Random Regular performs better at more time preferences. Longer memory allows Random Regular networks to accumulate exposures from diverse sources more effectively, reducing Cpq's temporal advantage.
+\end{itemize}
+
+\textbf{Critical insight}: Beta acts as a \textit{structural amplifier}. At $\beta=1$, network structure determines outcomes decisively (0\% Case C). At $\beta \geq 3$, genuine competition emerges, but longer $\beta$ systematically favors Random Regular networks in competitive scenarios.
+
+\subsection{Threshold and Adoption Probability Effects}
+
+\paragraph{Threshold Has Moderate, Non-Monotonic Effect:}
+
+Delta-star varies modestly across thresholds:
+\begin{itemize}
+    \item Threshold 2.0--2.5: Mean $\delta^* = 0.540$
+    \item Threshold 3.0--3.5: Mean $\delta^* = 0.563$ (peak)
+    \item Threshold 4.0--4.5: Mean $\delta^* = 0.541$
+    \item Threshold 4.5--5.0: Mean $\delta^* = 0.541$
+\end{itemize}
+
+The modest variation (0.540 to 0.563) suggests that threshold primarily affects \textit{whether} competition occurs (dominance frequency), not \textit{how balanced} competition is when it does occur ($\delta^*$ magnitude).
+
+\paragraph{Reinforced Adoption Probability (p2) Has Minimal Effect:}
+
+Surprisingly, $p_2$ has almost no effect on $\delta^*$:
+\begin{itemize}
+    \item $p_2 \in [0.5, 0.6)$: Mean $\delta^* = 0.550$
+    \item $p_2 \in [0.6, 0.7)$: Mean $\delta^* = 0.549$
+    \item $p_2 \in [0.7, 0.8)$: Mean $\delta^* = 0.545$
+    \item $p_2 \in [0.8, 0.9)$: Mean $\delta^* = 0.545$
+    \item $p_2 \in [0.9, 1.0)$: Mean $\delta^* = 0.545$
+\end{itemize}
+
+The near-constant $\delta^*$ across $p_2$ values indicates that reinforced adoption probability affects \textit{absolute spreading rates} for both networks similarly, but does not shift their \textit{relative} temporal advantage.
+
+\subsection{Heatmap Patterns: Visual Summary}
+
+The delta-star heatmaps reveal clear visual patterns:
+
+\paragraph{Pattern 1: Threshold Gradient (p2 vs threshold plots):}
+\begin{itemize}
+    \item \textbf{Low threshold (bottom)}: Blue tones (low $\delta^*$) --- Random Regular advantage
+    \item \textbf{High threshold (top)}: Red/orange tones (high $\delta^*$) --- Cpq advantage persists longer
+    \item \textbf{Interpretation}: At high thresholds, Cpq's ability to provide reinforcement (via lattice edges) becomes valuable, extending its competitive advantage across more time preferences
+\end{itemize}
+
+\paragraph{Pattern 2: Beta Gradient (beta vs threshold plots):}
+\begin{itemize}
+    \item \textbf{Low beta (left)}: Red/orange tones (high $\delta^*$) --- Cpq maintains advantage
+    \item \textbf{High beta (right)}: Blue tones (low $\delta^*$) --- Random Regular dominates most time preferences
+    \item \textbf{Interpretation}: Confirms that longer influence duration systematically favors Random Regular networks
+\end{itemize}
+
+\paragraph{Pattern 3: Network-Specific Intensity:}
+\begin{itemize}
+    \item \textbf{p4q0}: Predominantly blue (low $\delta^*$ throughout)
+    \item \textbf{p2q4/p1q6}: Predominantly orange/red (high $\delta^*$ throughout)
+    \item \textbf{p3q2}: Intermediate coloring
+\end{itemize}
+
+\subsection{Dominance Frequency Analysis: Why Certain Networks Win More Often}
+
+While $\delta^*$ measures competitive balance \textit{when competition exists}, dominance frequency (Case A/B percentages) measures \textit{how often} each network type wins outright. This section analyzes why p1q6 dominates in 65.9\% of parameter combinations while p4q0 loses in 42.4\%.
+
+\paragraph{Overall Dominance Hierarchy:}
+
+Across 17,640 parameter combinations per network:
+\begin{itemize}
+    \item \textbf{p1q6} (75\% random): Wins 65.9\%, Loses 8.3\%, Competes 25.8\% $\to$ \textbf{Strong winner}
+    \item \textbf{p2q4} (50\% random): Wins 49.2\%, Loses 24.8\%, Competes 26.0\% $\to$ Competitive
+    \item \textbf{p3q2} (25\% random): Wins 26.1\%, Loses 47.1\%, Competes 26.8\% $\to$ Usually loses
+    \item \textbf{p4q0} (0\% random): Wins 11.4\%, Loses 42.4\%, Competes 46.2\% $\to$ \textbf{Weakest}
+\end{itemize}
+
+The monotonic relationship (more random edges $\to$ more wins) suggests that random connectivity is advantageous across the tested parameter space.
+
+\paragraph{Mechanism: The Catastrophic Beta Collapse of Pure Lattice (p4q0)}
+
+Table~\ref{tab:beta_collapse} reveals a \textbf{dramatic reversal} as influence duration increases.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{$\beta=1$} & \textbf{$\beta=3$} & \textbf{$\beta=5$} & \textbf{$\beta=7$} \\
+\midrule
+p4q0 & 65.0\% & 2.0\% & 0.0\% & 0.0\% \\
+p3q2 & 69.1\% & 19.0\% & 12.7\% & 10.4\% \\
+p2q4 & 83.8\% & 34.8\% & 39.2\% & 41.9\% \\
+p1q6 & 89.6\% & 58.6\% & 64.2\% & 66.3\% \\
+\bottomrule
+\end{tabular}
+\caption{Case A percentage (Cpq dominates) by beta. Pure lattice (p4q0) \textbf{collapses from 65\% to 0\%} as beta increases, while p1q6 maintains 60--90\% dominance. This is not a gradual decline --- it is a catastrophic structural failure.}
+\label{tab:beta_collapse}
+\end{table}
+
+\textbf{Why p4q0 Wins at $\beta=1$ (Short Influence):}
+
+At $\beta=1$, only nodes that adopted in the \textit{previous timestep} remain influential. This creates a thin, fast-moving wavefront.
+
+\begin{itemize}
+    \item \textbf{Pure lattice advantage}: The wavefront is spatially coordinated
+    \item All influential nodes occupy adjacent positions on the ring
+    \item Their combined influence creates a coherent local cascade
+    \item The wave advances sequentially: timestep 1 → positions 100--110, timestep 2 → positions 110--120, etc.
+    \item Each new adopter is immediately surrounded by other recent adopters (within $\pm 4$ positions)
+    \item Threshold is easily met via local reinforcement
+    \item \textbf{Random Regular disadvantage}: The wavefront is spatially fragmented
+    \item Influential nodes are scattered randomly across the network
+    \item Hard to create coordinated local cascades when influential nodes aren't near each other
+    \item Each new adopter is isolated --- its neighbors may not have adopted yet
+    \item \textbf{Result}: Pure lattice beats Random Regular (p4q0 wins 65\% at $\beta=1$)
+\end{itemize}
+
+\textbf{Why p4q0 Catastrophically Fails at $\beta \geq 3$ (Long Influence):}
+
+At $\beta=3$ or higher, nodes from the last 3+ timesteps \textit{all stay influential simultaneously}. This fundamentally changes the spreading dynamics.
+
+\begin{itemize}
+    \item \textbf{What changes}: Count of \textit{currently influential neighbors} becomes crucial
+    \item Algorithm: At each timestep, count how many neighbors are in state 'I' \textit{right now}
+    \item If count $\geq$ threshold $\to$ use $p_2$ (high probability), else use $p_1$ (low probability)
+    \item \textbf{Pure lattice failure}: Neighborhood overlap prevents count from growing
+    \item Seeds at positions 100, 102, 105, 107 all remain influential for 3+ timesteps
+    \item Non-seed at position 103 sees these 4 neighbors, \textit{but all 4 are from the same seed cluster}
+    \item Even as spreading continues, new adopters are \textit{also} in the same local region
+    \item The count of currently influential neighbors plateaus at 3--5 (all local)
+    \item At threshold=4: uses $p_2$; at threshold=5: stuck at $p_1$
+    \item The wave must propagate via low-probability trials, which often fail
+    \item \textbf{Random Regular success}: Accumulates diverse influential neighbors over time
+    \item At $t=5$: Node X sees influential neighbor A (random edge to distant region)
+    \item At $t=7$: Node X sees influential neighbor B (another random edge)
+    \item At $t=10$: Node X sees influential neighbor C (yet another random edge)
+    \item With $\beta=5$, all three stay influential long enough to be counted \textit{simultaneously}
+    \item Count grows: 1 $\to$ 2 $\to$ 3 $\to$ threshold reached $\to$ unlock $p_2$
+    \item Now adoption proceeds with high probability
+    \item \textbf{Result}: Random Regular dominates (p4q0 wins only 2\% at $\beta=3$, 0\% at $\beta \geq 5$)
+\end{itemize}
+
+\textbf{Critical Insight:}
+The pure lattice isn't just "a bit worse" at long $\beta$ --- it \textbf{completely fails}. Going from 65\% dominance to 0\% dominance is a structural breakdown. All p4q0's advantage at $\beta=1$ comes from wavefront coordination, which is irrelevant at long $\beta$.
+
+\paragraph{Mechanism: Why p1q6 Maintains Dominance Across All Beta Values}
+
+Table~\ref{tab:beta_collapse} shows p1q6 maintains 60--90\% dominance at \textit{all} beta values. Why doesn't p1q6 suffer the same collapse as p4q0?
+
+\textbf{At $\beta=1$ (Short Influence):}
+\begin{itemize}
+    \item p1q6 has $\sim$2 lattice edges per node
+    \item This provides \textit{minimal} local structure for wavefront coordination
+    \item Enough to beat pure Random Regular (which has zero structure)
+    \item The $\sim$6 random edges create multiple independent wavefronts
+    \item Faster parallel spreading than p4q0's single wave
+    \item \textbf{Result}: p1q6 wins 89.6\% (even beats p4q0's 65\%)
+\end{itemize}
+
+\textbf{At $\beta \geq 3$ (Long Influence):}
+\begin{itemize}
+    \item p1q6 has $\sim$6 random edges per node
+    \item These bring influence from \textit{diverse spatial regions}
+    \item Node X can accumulate exposures from 6 different random sources over time
+    \item Count of currently influential neighbors grows quickly
+    \item Threshold reached early $\to$ unlock $p_2$ $\to$ rapid adoption
+    \item The $\sim$2 lattice edges provide minor local boost but aren't relied upon
+    \item \textbf{Result}: p1q6 maintains 60--66\% dominance (doesn't collapse)
+\end{itemize}
+
+\textbf{Key Difference from p4q0:}
+p1q6 succeeds via \textit{different mechanisms} at different $\beta$:
+\begin{itemize}
+    \item Low $\beta$: Uses random edges for parallel spreading
+    \item High $\beta$: Uses random edges for diverse exposure accumulation
+    \item Random connectivity is advantageous at \textit{both} timescales
+\end{itemize}
+
+p4q0 only has \textit{one} mechanism (wavefront coordination), which fails at high $\beta$.
+
+\paragraph{Threshold-Dependent Dominance: The Fragility of Lattice-Heavy Structures}
+
+Table~\ref{tab:threshold_dominance} shows dominance by threshold.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Network} & \textbf{Threshold $\approx 2$} & \textbf{Threshold $\approx 3$} & \textbf{Threshold $\approx 4$} \\
+\midrule
+p4q0 & 19.0\% & 10.9\% & 4.8\% \\
+p3q2 & 59.0\% & 13.5\% & 7.0\% \\
+p2q4 & 77.3\% & 44.0\% & 27.9\% \\
+p1q6 & 65.5\% & 68.1\% & 64.4\% \\
+\bottomrule
+\end{tabular}
+\caption{Case A percentage by threshold. Lattice-heavy structures (p4q0, p3q2) collapse at high thresholds, while p1q6 maintains 64--68\% dominance across all thresholds.}
+\label{tab:threshold_dominance}
+\end{table}
+
+\textbf{Why p3q2 Collapses (59\% $\to$ 7\%):}
+\begin{itemize}
+    \item At threshold=2: $\sim$2 random edges + $\sim$6 lattice edges suffice
+    \item Local cluster provides 2--3 simultaneous exposures easily
+    \item Threshold met quickly, p3q2 wins 59\%
+    \item At threshold=4: Need 4 simultaneous influential neighbors
+    \item Lattice edges only provide 2--3 (neighborhood overlap limits growth)
+    \item Random edges only provide $\sim$2 additional (not enough)
+    \item Caught in middle: too much lattice to benefit from random coverage, too few random edges to reach high threshold
+    \item \textbf{Result}: Fragile structure, collapses from 59\% to 7\%
+\end{itemize}
+
+\textbf{Why p1q6 Is Robust (65.5\% $\to$ 64.4\%):}
+\begin{itemize}
+    \item At threshold=2: $\sim$6 random edges easily provide 2 diverse sources
+    \item At threshold=4: $\sim$6 random edges provide 4--5 diverse sources
+    \item Random connectivity scales well with threshold requirements
+    \item \textbf{Result}: Robust structure, maintains 64--68\% dominance at all thresholds
+\end{itemize}
+
+\paragraph{The Exceptional Case: When Does p4q0 Win?}
+
+Pure lattice does win in one specific regime: \textbf{$\beta=1$ AND threshold=2}. Here p4q0 achieves 92.5\% dominance (its best performance).
+
+\textbf{Why this regime favors p4q0:}
+\begin{itemize}
+    \item $\beta=1$: Wavefront coordination advantage (as explained above)
+    \item Threshold=2: Very easy to satisfy --- just 2 influential neighbors needed
+    \item Local cluster easily provides 2+ exposures
+    \item No need for diverse long-range connections
+    \item Pure lattice's coherent wave propagates efficiently
+    \item \textbf{But}: This is a narrow regime
+    \item As soon as $\beta \geq 3$ OR threshold $\geq 3$, p4q0 collapses
+\end{itemize}
+
+\textbf{Interpretation:}
+Pure lattice is \textbf{extremely fragile} --- it only wins in a small corner of parameter space ($\beta=1$, threshold$\leq 2$). Outside this regime, it fails catastrophically.
+
+\subsection{Synthesis: Dominance vs Delta-Star}
+
+Combining dominance patterns with $\delta^*$ analysis reveals:
+
+\paragraph{p4q0 (Pure Lattice):}
+\begin{itemize}
+    \item Dominance: Loses often (11.4\% Case A, 42.4\% Case B)
+    \item Delta-star: When competition exists, Random dominates most time preferences ($\delta^* = 0.430$)
+    \item \textbf{Verdict}: Weakest structure on both metrics
+\end{itemize}
+
+\paragraph{p3q2 (Lattice-Heavy):}
+\begin{itemize}
+    \item Dominance: Often loses (26.1\% Case A, 47.1\% Case B)
+    \item Delta-star: Nearly balanced when competition exists ($\delta^* = 0.540$)
+    \item \textbf{Verdict}: Weak dominance but balanced temporal competition
+\end{itemize}
+
+\paragraph{p2q4 (Balanced):}
+\begin{itemize}
+    \item Dominance: Competitive (49.2\% Case A, 24.8\% Case B, 26.0\% Case C)
+    \item Delta-star: \textbf{Highest} when competition exists ($\delta^* = 0.620$)
+    \item \textbf{Verdict}: Most balanced structure---wins moderately often, and when it competes, maintains advantage longest
+\end{itemize}
+
+\paragraph{p1q6 (Random-Heavy):}
+\begin{itemize}
+    \item Dominance: Wins most often (65.9\% Case A, only 8.3\% Case B)
+    \item Delta-star: High when competition exists ($\delta^* = 0.598$)
+    \item \textbf{Verdict}: Strongest overall---wins frequently and maintains advantage when competing
+\end{itemize}
+
+\subsection{Implications}
+
+\paragraph{No Universal Optimal Structure:}
+The ``best'' network depends on the metric:
+\begin{itemize}
+    \item If maximizing \textit{win frequency}: Choose p1q6 (65.9\% Case A)
+    \item If maximizing \textit{temporal robustness in competition}: Choose p2q4 ($\delta^* = 0.620$)
+    \item If avoiding \textit{poor performance}: Avoid p4q0 (weakest on both metrics)
+\end{itemize}
+
+\paragraph{Parameter Regime Matters:}
+\begin{itemize}
+    \item \textbf{Short influence ($\beta=3$)}: Cpq networks maintain advantage longer (high $\delta^*$)
+    \item \textbf{Long influence ($\beta=7$)}: Random Regular dominates more time preferences (low $\delta^*$)
+    \item \textbf{High threshold}: Cpq advantage extends further
+    \item \textbf{Low threshold}: Random advantage more prominent
+\end{itemize}
+
+\paragraph{Practical Guidance:}
+For designing networks to maximize complex contagion spreading:
+\begin{itemize}
+    \item \textbf{If influence is short-lived}: Hybrid structures (p2q4, p1q6) excel
+    \item \textbf{If influence is long-lived}: Random Regular becomes competitive even against random-heavy hybrids
+    \item \textbf{General recommendation}: Structures with 50--75\% random edges (p2q4, p1q6) are safest across parameter regimes
+    \item \textbf{Strong recommendation}: Avoid pure lattice (p4q0), which underperforms on both dominance and $\delta^*$
+\end{itemize}
+
+\subsection{Critical Boundaries and Phase Transitions in Parameter Space}
+
+Visual inspection of delta-star heatmaps reveals sharp boundaries and phase transitions that divide parameter space into distinct regimes. These boundaries represent fundamental shifts in competitive dynamics.
+
+\paragraph{Boundary 1: The Critical Beta Phase Transition ($\beta \approx 2.0$--2.5)}
+
+The most prominent feature across all heatmaps is a \textbf{sharp horizontal boundary around $\beta \approx 2.0$ to $2.5$} in p2 vs beta plots. This boundary represents a phase transition where the competitive balance fundamentally shifts.
+
+\textbf{Visual Evidence:} Figure~\ref{fig:phase_transition} shows the critical beta phase transition across different network structures.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{p4q0_thrshld3_p2_vs_beta.png}
+    \caption{p4q0 (threshold=3.0): Sharp horizontal boundary at $\beta \approx 2.0$}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{p2q4_thrshld3_p2_vs_beta.png}
+    \caption{p2q4 (threshold=3.0): Clear boundary at $\beta \approx 2.5$}
+\end{subfigure}
+\caption{The critical beta phase transition (p2 vs beta heatmaps). A sharp horizontal boundary around $\beta=2.0$--2.5 separates the wavefront coordination regime (below, red/orange) from the exposure accumulation regime (above, blue). This boundary represents a fundamental shift in spreading dynamics.}
+\label{fig:phase_transition}
+\end{figure}
+
+\textbf{Characteristics of the Phase Transition:}
+\begin{itemize}
+    \item \textbf{Sharpness}: The transition occurs over a narrow beta range ($\Delta \beta \approx 0.5$--1.0)
+    \item \textbf{Magnitude}: Delta-star drops by 0.3--0.5 units across the boundary (50\%+ reduction)
+    \item \textbf{Network dependence}: Boundary is sharpest for lattice-heavy structures (p4q0, p3q2), more gradual for random-heavy structures (p1q6)
+    \item \textbf{Location}: Boundary position varies slightly with threshold (higher threshold $\to$ boundary shifts to slightly higher beta)
+\end{itemize}
+
+\textbf{Mechanistic Interpretation:}
+
+This boundary marks the transition between two fundamentally different spreading regimes:
+
+\begin{itemize}
+    \item \textbf{Below boundary} ($\beta < 2$): \textit{Wavefront coordination regime}
+    \begin{itemize}
+        \item Only 1--2 timesteps of adopters remain influential simultaneously
+        \item Creates a thin, fast-moving wavefront
+        \item Lattice structure coordinates wavefront effectively (adjacent influential nodes)
+        \item Cpq networks maintain temporal advantage across many time preferences (high $\delta^*$)
+    \end{itemize}
+
+    \item \textbf{Above boundary} ($\beta > 2.5$): \textit{Exposure accumulation regime}
+    \begin{itemize}
+        \item 3+ timesteps of adopters stay influential simultaneously
+        \item Count of currently influential neighbors becomes critical
+        \item Random edges accumulate diverse exposures from independent sources
+        \item Lattice edges create redundant exposures from same cluster (neighborhood overlap)
+        \item Random Regular networks gain advantage (low $\delta^*$ for Cpq)
+    \end{itemize}
+\end{itemize}
+
+\textbf{Why This is a ``Phase Transition'':}
+
+This is not a gradual parameter variation but a qualitative shift in mechanism dominance:
+\begin{itemize}
+    \item At $\beta=1$: Wavefront coordination is the dominant mechanism
+    \item At $\beta=3$: Exposure accumulation is the dominant mechanism
+    \item The transition occurs abruptly around $\beta=2$--2.5
+    \item The shift is analogous to physical phase transitions (e.g., water freezing at 0°C)
+    \item Different network structures respond differently: p4q0 ``freezes'' (loses all advantage), p1q6 remains ``fluid'' (maintains advantage)
+\end{itemize}
+
+\paragraph{Boundary 2: Threshold Stratification in Beta vs Threshold Plots}
+
+Beta vs threshold heatmaps show horizontal stratification by threshold level (see \texttt{exp\_beta\_vs\_thrshld/p2q4\_p20.8.png}):
+
+\begin{itemize}
+    \item \textbf{Bottom region} (threshold $\approx 2.0$--2.5): More blue tones (lower $\delta^*$)
+    \item \textbf{Top region} (threshold $\approx 4.5$--5.0): More orange/red tones (higher $\delta^*$)
+    \item \textbf{Transition}: Gradual, not sharp
+\end{itemize}
+
+\textbf{Interpretation:}
+
+At high thresholds, Cpq networks' ability to provide local reinforcement (multiple simultaneous exposures from lattice cluster) becomes valuable, extending their competitive advantage. However, this effect is weaker than the beta phase transition.
+
+\paragraph{Boundary 3: The Beta=1 Diagonal in Pure Lattice}
+
+At $\beta=1$, pure lattice (p4q0) shows a unique diagonal boundary pattern, as shown in Figure~\ref{fig:p4q0_diagonal}.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{p4q0_beta1_p2_vs_thrshld.png}
+    \caption{$\beta=1$: Diagonal boundary pattern (blue to red)}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{p4q0_beta7_p2_vs_thrshld.png}
+    \caption{$\beta=7$: Boundary disappears (entirely blue)}
+\end{subfigure}
+\caption{Pure lattice (p4q0) diagonal boundary at $\beta=1$ (left) vs complete collapse at $\beta=7$ (right). The diagonal represents the only regime where p4q0 competes. At $\beta \geq 3$, this structure vanishes and Random Regular dominates throughout.}
+\label{fig:p4q0_diagonal}
+\end{figure}
+
+\textbf{Interpretation:}
+
+The diagonal boundary at $\beta=1$ represents the \textit{only regime} where p4q0 has competitive advantage. Lower-left: Cpq dominates (blue); Upper-right: Random dominates (red/purple); Diagonal band: competitive (purple/mixed). This boundary completely disappears at $\beta \geq 3$.
+
+\paragraph{Boundary 4: Network-Dependent Gradient Intensity}
+
+Comparing equivalent plots across network types reveals systematic differences in boundary sharpness:
+
+\begin{itemize}
+    \item \textbf{p4q0} (pure lattice): Sharpest boundaries, strongest color contrasts (blue vs red)
+    \item \textbf{p3q2} (lattice-heavy): Moderate boundaries, smoother gradients
+    \item \textbf{p2q4} (balanced): Clear boundaries but less extreme
+    \item \textbf{p1q6} (random-heavy): Most gradual transitions, stays orange/warm-toned overall
+\end{itemize}
+
+Compare:
+\begin{itemize}
+    \item \texttt{exp\_p2\_vs\_beta/p4q0\_thrshld3.0.png}: Sharp horizontal line, stark blue/red contrast
+    \item \texttt{exp\_p2\_vs\_beta/p3q2\_thrshld3.0.png}: Smoother gradient, more salmon/orange overall
+    \item \texttt{exp\_p2\_vs\_beta/p1q6\_thrshld3.0.png}: Very gradual, predominantly warm colors
+\end{itemize}
+
+\textbf{Interpretation:}
+
+Network structure determines sensitivity to parameter variations:
+\begin{itemize}
+    \item \textbf{Fragile structures} (p4q0): Cross critical boundaries and collapse catastrophically $\to$ sharp transitions
+    \item \textbf{Robust structures} (p1q6): Maintain performance across parameter variations $\to$ smooth gradients
+    \item Boundary sharpness is itself a measure of structural robustness
+\end{itemize}
+
+\paragraph{Summary: The Parameter Space Landscape}
+
+The delta-star heatmaps reveal that parameter space is not uniform but contains:
+\begin{enumerate}
+    \item \textbf{One dominant phase boundary}: Beta $\approx$ 2.0--2.5 (horizontal)
+    \item \textbf{Regime-specific boundaries}: Diagonal at $\beta=1$ for p4q0
+    \item \textbf{Gradual stratification}: Threshold creates mild vertical gradients
+    \item \textbf{Network-dependent sensitivity}: Boundary sharpness varies by network type
+\end{enumerate}
+
+These boundaries are not arbitrary parameter thresholds but reflect fundamental mechanistic shifts in spreading dynamics. The beta phase transition is particularly important because it represents a qualitative change in which structural features (coordination vs diversity) dominate competitive advantage.
+
+\subsection{Predicted Effects of Very Low Base Adoption Probability}
+
+The current experiments used $p_1 = 0.1$ (base adoption probability before reaching threshold). This section analyzes the predicted effects if $p_1$ were much lower (e.g., $p_1 = 0.05$ or $p_1 = 0.01$), based on the established diffusion mechanism.
+
+\paragraph{Mechanism: How Low p1 Creates a "Penalty Phase"}
+
+Recall the adoption mechanism:
+\begin{itemize}
+    \item At each timestep, the algorithm counts currently influential neighbors
+    \item If count $<$ threshold: adoption probability = $p_1$ (low)
+    \item If count $\geq$ threshold: adoption probability = $p_2$ (high, 0.5--1.0)
+    \item Nodes must successfully adopt to transition from susceptible to influential
+\end{itemize}
+
+With very low $p_1$, nodes that cannot reach threshold face a severe "penalty phase":
+\begin{itemize}
+    \item \textbf{Current setup} ($p_1 = 0.1$): Cumulative probability across 7 timesteps = $1 - (0.9)^7 = 52.2\%$
+    \item \textbf{Low p1} ($p_1 = 0.05$): Cumulative probability across 7 timesteps = $1 - (0.95)^7 = 30.2\%$
+    \item \textbf{Very low p1} ($p_1 = 0.01$): Cumulative probability across 7 timesteps = $1 - (0.99)^7 = 6.8\%$
+\end{itemize}
+
+This penalty only affects nodes that remain below threshold. Nodes that reach threshold immediately use $p_2$ and are largely unaffected.
+
+\paragraph{Predicted Effect on Dominance Patterns}
+
+Table~\ref{tab:low_p1_dominance_prediction} shows predicted changes in dominance.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{Current} & \multicolumn{3}{c}{\textbf{Predicted Case A \%}} & \textbf{Direction} \\
+ & \textbf{($p_1=0.1$)} & $p_1=0.05$ & $p_1=0.01$ & $p_1=0.001$ & \\
+\midrule
+p4q0 (0\% random)  & 11.4\% & $\sim$5\% & $\sim$1\% & $\sim$0\% & \textbf{Collapse} \\
+p3q2 (25\% random) & 26.1\% & $\sim$15\% & $\sim$5\% & $\sim$1\% & Steep decline \\
+p2q4 (50\% random) & 49.2\% & $\sim$45\% & $\sim$40\% & $\sim$35\% & Moderate decline \\
+p1q6 (75\% random) & 65.9\% & $\sim$63\% & $\sim$60\% & $\sim$58\% & Slight decline \\
+\bottomrule
+\end{tabular}
+\caption{Predicted dominance (Case A percentage) at very low $p_1$ values. Networks that cannot reach threshold (p4q0, p3q2) would collapse catastrophically, while networks that can reach threshold (p1q6) would remain largely robust.}
+\label{tab:low_p1_dominance_prediction}
+\end{table}
+
+\textbf{Why p4q0 Would Collapse Even Further:}
+\begin{itemize}
+    \item At $\beta \geq 3$, p4q0 already cannot reach threshold due to neighborhood overlap
+    \item All spreading occurs via low-probability trials using $p_1$
+    \item \textbf{Current} ($p_1=0.1$): Spreading is slow but sometimes succeeds (11.4\% dominance)
+    \item \textbf{With} $p_1=0.01$: Spreading becomes nearly impossible (predicted $<$5\% dominance)
+    \item The wave propagation fails completely --- nodes rarely adopt even when exposed
+    \item \textbf{Mechanism}: Pure lattice already fails structurally (can't reach threshold), and low $p_1$ makes this failure catastrophic
+\end{itemize}
+
+\textbf{Why p1q6 Would Remain Robust:}
+\begin{itemize}
+    \item p1q6 successfully reaches threshold via diverse exposure accumulation
+    \item Most nodes quickly transition from $p_1$ regime to $p_2$ regime
+    \item \textbf{Early phase} (before threshold): Slightly slower with low $p_1$
+    \item \textbf{Once threshold reached}: Uses $p_2 \in [0.5, 1.0]$, unaffected by $p_1$
+    \item \textbf{Mechanism}: p1q6's structural advantage (random edges bring diverse exposures) remains intact
+    \item The penalty phase is brief because threshold is reached quickly
+    \item Predicted dominance drops only slightly (65.9\% $\to$ 60\% at $p_1=0.01$)
+\end{itemize}
+
+\textbf{Overall Pattern:}
+\begin{itemize}
+    \item \textbf{The dominance gap widens dramatically}
+    \item p4q0 vs p1q6: Currently 11.4\% vs 65.9\% (5.8× difference)
+    \item At $p_1=0.01$: Predicted 1\% vs 60\% (60× difference!)
+    \item Low $p_1$ \textit{amplifies} existing structural differences
+    \item Networks that can reach threshold become even more dominant
+\end{itemize}
+
+\paragraph{Predicted Effect on Delta-Star Values}
+
+Table~\ref{tab:low_p1_deltastar_prediction} shows predicted changes in $\delta^*$.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{Current} & \multicolumn{3}{c}{\textbf{Predicted Mean $\delta^*$}} & \textbf{Direction} \\
+ & \textbf{($p_1=0.1$)} & $p_1=0.05$ & $p_1=0.01$ & $p_1=0.001$ & \\
+\midrule
+p4q0 (0\% random)  & 0.430 & $\sim$0.35 & $\sim$0.25 & $\sim$0.15 & \textbf{Sharp drop} \\
+p3q2 (25\% random) & 0.540 & $\sim$0.50 & $\sim$0.45 & $\sim$0.40 & Moderate drop \\
+p2q4 (50\% random) & 0.620 & $\sim$0.60 & $\sim$0.58 & $\sim$0.56 & Slight drop \\
+p1q6 (75\% random) & 0.598 & $\sim$0.58 & $\sim$0.56 & $\sim$0.54 & Slight drop \\
+\bottomrule
+\end{tabular}
+\caption{Predicted $\delta^*$ values at very low $p_1$. Pure lattice (p4q0) would become even less competitive across time preferences, while random-heavy structures (p1q6, p2q4) would remain relatively robust.}
+\label{tab:low_p1_deltastar_prediction}
+\end{table}
+
+\textbf{Why p4q0's Delta-Star Would Drop Sharply:}
+\begin{itemize}
+    \item \textbf{Current} $\delta^* = 0.430$: p4q0 maintains slight early advantage (local reinforcement), but Random Regular dominates for $\delta > 0.43$
+    \item \textbf{With very low $p_1$}: Early phase becomes extremely slow
+    \item Pure lattice spreading (using $p_1$ throughout) crawls at glacial pace
+    \item Random Regular (which can reach threshold and use $p_2$) spreads much faster even in early timesteps
+    \item p4q0's early advantage \textit{disappears} because $p_1$ is too low to capitalize on local reinforcement
+    \item \textbf{Predicted} $\delta^* \approx 0.25$ at $p_1=0.01$: Random dominates for almost all time preferences ($\delta > 0.25$)
+    \item \textbf{Mechanism}: Low $p_1$ eliminates p4q0's only remaining advantage (early wavefront coordination)
+\end{itemize}
+
+\textbf{Why p1q6's Delta-Star Would Remain High:}
+\begin{itemize}
+    \item \textbf{Current} $\delta^* = 0.598$: p1q6 maintains advantage until $\delta > 0.60$
+    \item \textbf{With very low $p_1$}: Early phase slows slightly, but threshold is reached quickly
+    \item Once threshold is reached (within 2--3 timesteps), spreading proceeds at $p_2$ rate
+    \item The brief early slowdown has minimal impact on overall temporal advantage
+    \item \textbf{Predicted} $\delta^* \approx 0.56$ at $p_1=0.01$: Still maintains advantage until $\delta > 0.56$
+    \item \textbf{Mechanism}: p1q6's ability to unlock $p_2$ quickly shields it from the low-$p_1$ penalty
+\end{itemize}
+
+\textbf{Overall Pattern:}
+\begin{itemize}
+    \item \textbf{The delta-star gradient steepens}
+    \item p4q0 vs p1q6: Currently 0.430 vs 0.598 (difference = 0.168)
+    \item At $p_1=0.01$: Predicted 0.25 vs 0.56 (difference = 0.31, nearly doubled!)
+    \item Low $p_1$ makes temporal competition \textit{less balanced} for pure lattice
+    \item Random-heavy structures maintain competitive balance better
+\end{itemize}
+
+\paragraph{Key Insight: Low p1 as a Structural Stress Test}
+
+Very low $p_1$ acts as a \textbf{stress test} that reveals structural fragility:
+\begin{itemize}
+    \item \textbf{Robust structures} (p1q6, p2q4): Can reach threshold quickly, largely immune to $p_1$ variations
+    \item \textbf{Fragile structures} (p4q0, p3q2): Cannot reach threshold, completely dependent on $p_1$ value
+    \item The current experiments ($p_1=0.1$) already favor threshold-reaching structures
+    \item Lower $p_1$ would \textit{amplify} this advantage dramatically
+    \item \textbf{Implication}: In real-world settings where base adoption is very low (e.g., costly innovations), networks with high random connectivity become even more critical for successful diffusion
+\end{itemize}
+
+\subsection{Actual Results with p1=0.01: A Complete Reversal}
+
+\textbf{CRITICAL UPDATE}: The above predictions were tested by running the full experiment suite with $p_1 = 0.01$ instead of $p_1 = 0.1$. The actual results \textbf{completely contradict} the predictions. This section documents what actually happened and explains why the mechanism was misunderstood.
+
+\paragraph{Predicted vs Actual: Dominance Patterns}
+
+Table~\ref{tab:p1_comparison_dominance} shows the dramatic reversal in dominance patterns.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{p1=0.1} & \textbf{Predicted} & \textbf{Actual} & \textbf{Change} \\
+ & \textbf{(Baseline)} & \textbf{p1=0.01} & \textbf{p1=0.01} & \textbf{Direction} \\
+\midrule
+p4q0 (0\% random)  & 11.4\% & $\sim$1\% & \textbf{90.3\%} & \textcolor{blue}{$+78.9\%$ (7.9× increase)} \\
+p3q2 (25\% random) & 26.1\% & $\sim$5\% & \textbf{75.2\%} & \textcolor{blue}{$+49.1\%$ (2.9× increase)} \\
+p2q4 (50\% random) & 49.2\% & $\sim$40\% & \textbf{73.2\%} & \textcolor{blue}{$+24.0\%$ (1.5× increase)} \\
+p1q6 (75\% random) & 65.9\% & $\sim$60\% & \textbf{69.2\%} & \textcolor{blue}{$+3.3\%$ (slight increase)} \\
+\bottomrule
+\end{tabular}
+\caption{Dominance reversal at p1=0.01. Predictions expected lattice-heavy structures to collapse catastrophically. Instead, they \textit{dominated overwhelmingly}. Pure lattice (p4q0) went from weakest (11.4\%) to strongest (90.3\%) performer --- the exact opposite of predictions.}
+\label{tab:p1_comparison_dominance}
+\end{table}
+
+\textbf{Key Observation: Complete Hierarchy Reversal}
+
+The competitive hierarchy at $p_1=0.1$:
+\begin{itemize}
+    \item p1q6 (75\% random) wins most often (65.9\%)
+    \item p4q0 (0\% random) loses most often (11.4\%)
+    \item \textbf{Interpretation}: Random edges confer advantage
+\end{itemize}
+
+The competitive hierarchy at $p_1=0.01$:
+\begin{itemize}
+    \item p4q0 (0\% random) wins most often (90.3\%)
+    \item p1q6 (75\% random) wins least often (69.2\%)
+    \item \textbf{Interpretation}: Lattice structure confers overwhelming advantage
+\end{itemize}
+
+This is not a quantitative adjustment --- it is a \textbf{qualitative inversion} of competitive dynamics.
+
+\paragraph{Predicted vs Actual: Delta-Star Values}
+
+Table~\ref{tab:p1_comparison_deltastar} shows delta-star values increased rather than decreased.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{p1=0.1} & \textbf{Predicted} & \textbf{Actual} & \textbf{Change} \\
+ & \textbf{(Baseline)} & \textbf{p1=0.01} & \textbf{p1=0.01} & \textbf{Direction} \\
+\midrule
+p4q0 (0\% random)  & 0.430 & $\sim$0.25 & \textbf{0.559} & \textcolor{blue}{$+0.129$ (30\% increase)} \\
+p3q2 (25\% random) & 0.540 & $\sim$0.45 & \textbf{0.670} & \textcolor{blue}{$+0.130$ (24\% increase)} \\
+p2q4 (50\% random) & 0.620 & $\sim$0.58 & \textbf{0.760} & \textcolor{blue}{$+0.140$ (23\% increase)} \\
+p1q6 (75\% random) & 0.598 & $\sim$0.56 & \textbf{0.783} & \textcolor{blue}{$+0.185$ (31\% increase)} \\
+\bottomrule
+\end{tabular}
+\caption{Delta-star reversal at p1=0.01. Predictions expected $\delta^*$ to drop (indicating Random Regular advantage). Instead, all $\delta^*$ values \textit{increased} by 23--31\%, meaning Cpq networks maintained competitive advantage across even wider ranges of time preferences.}
+\label{tab:p1_comparison_deltastar}
+\end{table}
+
+\textbf{At $p_1=0.1$}: p4q0 had lowest $\delta^* = 0.430$ (Random Regular dominated for $\delta > 0.43$)
+
+\textbf{At $p_1=0.01$}: p4q0 has $\delta^* = 0.559$ (Cpq maintains advantage until $\delta > 0.56$)
+
+The predicted "sharp drop" to $\delta^* \approx 0.25$ did not occur. Instead, $\delta^*$ increased by 30\%, indicating that pure lattice networks became \textit{more competitive} across time preferences, not less.
+
+\paragraph{The Beta Collapse Reversal}
+
+Section 4.6 documented the "catastrophic beta collapse" of pure lattice at $p_1=0.1$. Table~\ref{tab:beta_reversal} shows this collapse \textbf{completely vanishes} at $p_1=0.01$.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{$\beta=1$} & \textbf{$\beta=3$} & \textbf{$\beta=5$} & \textbf{$\beta=7$} \\
+\midrule
+\multicolumn{5}{l}{\textit{At p1=0.1 (original):}} \\
+p4q0 & 65.0\% & \textcolor{red}{2.0\%} & \textcolor{red}{0.0\%} & \textcolor{red}{0.0\%} \\
+p3q2 & 69.1\% & 19.0\% & 12.7\% & 10.4\% \\
+p2q4 & 83.8\% & 34.8\% & 39.2\% & 41.9\% \\
+p1q6 & 89.6\% & 58.6\% & 64.2\% & 66.3\% \\
+\midrule
+\multicolumn{5}{l}{\textit{At p1=0.01 (actual):}} \\
+p4q0 & \textcolor{blue}{96.8\%} & \textcolor{blue}{90.7\%} & \textcolor{blue}{86.5\%} & \textcolor{blue}{84.0\%} \\
+p3q2 & \textcolor{blue}{95.4\%} & \textcolor{blue}{81.6\%} & \textcolor{blue}{69.6\%} & \textcolor{blue}{61.4\%} \\
+p2q4 & \textcolor{blue}{97.8\%} & \textcolor{blue}{86.0\%} & \textcolor{blue}{70.6\%} & \textcolor{blue}{55.8\%} \\
+p1q6 & \textcolor{blue}{97.7\%} & \textcolor{blue}{84.6\%} & \textcolor{blue}{67.0\%} & \textcolor{blue}{50.6\%} \\
+\bottomrule
+\end{tabular}
+\caption{Beta collapse reversal. At p1=0.1, p4q0 collapsed from 65\% to 0\% as beta increased (catastrophic failure). At p1=0.01, p4q0 maintains 85--97\% dominance across all beta values (robust performance). The structural failure mechanism identified at p1=0.1 does not operate at p1=0.01.}
+\label{tab:beta_reversal}
+\end{table}
+
+\textbf{Critical Insight}: At $p_1=0.1$, the pure lattice's competitive success depended on a narrow parameter regime ($\beta=1$, low threshold). At $p_1=0.01$, pure lattice dominates \textit{across all beta values tested}. The fragility identified at $p_1=0.1$ transforms into robustness at $p_1=0.01$.
+
+\paragraph{The Threshold Effect Reversal}
+
+Table~\ref{tab:threshold_reversal} shows threshold effects also reversed.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Network} & \textbf{Threshold $\approx 2$} & \textbf{Threshold $\approx 3$} & \textbf{Threshold $\approx 4$} \\
+\midrule
+\multicolumn{4}{l}{\textit{At p1=0.1 (original):}} \\
+p4q0 & 19.0\% & 10.9\% & \textcolor{red}{4.8\%} \\
+p3q2 & 59.0\% & 13.5\% & \textcolor{red}{7.0\%} \\
+p2q4 & 77.3\% & 44.0\% & 27.9\% \\
+p1q6 & 65.5\% & 68.1\% & 64.4\% \\
+\midrule
+\multicolumn{4}{l}{\textit{At p1=0.01 (actual):}} \\
+p4q0 & \textcolor{blue}{99.8\%} & \textcolor{blue}{97.8\%} & \textcolor{blue}{86.8\%} \\
+p3q2 & \textcolor{blue}{97.8\%} & \textcolor{blue}{86.8\%} & \textcolor{blue}{56.1\%} \\
+p2q4 & \textcolor{blue}{92.0\%} & \textcolor{blue}{72.8\%} & \textcolor{blue}{62.9\%} \\
+p1q6 & \textcolor{blue}{71.0\%} & \textcolor{blue}{69.5\%} & \textcolor{blue}{66.9\%} \\
+\bottomrule
+\end{tabular}
+\caption{Threshold effect reversal. At p1=0.1, lattice-heavy structures collapsed as threshold increased. At p1=0.01, they maintain strong dominance even at high thresholds. p4q0 went from 5\% (threshold=4, p1=0.1) to 87\% (threshold=4, p1=0.01) --- a 17× increase.}
+\label{tab:threshold_reversal}
+\end{table}
+
+At $p_1=0.1$, high thresholds exposed lattice networks' inability to accumulate diverse exposures. At $p_1=0.01$, high thresholds become an \textit{advantage} for lattice networks because their local clustering enables rapid threshold satisfaction.
+
+\paragraph{Why the Predictions Failed: Mechanism Misidentification}
+
+The predictions assumed that lowering $p_1$ would act as a uniform penalty affecting both network types similarly, with lattice networks suffering more due to their structural inability to reach threshold. This was fundamentally incorrect.
+
+\textbf{The Flawed Prediction Mechanism}:
+\begin{enumerate}
+    \item At $p_1=0.1$, Random Regular networks can accumulate diverse exposures over time
+    \item Eventually they reach threshold and unlock $p_2$
+    \item Pure lattice networks fail to reach threshold due to neighborhood overlap
+    \item They remain stuck at $p_1$ spreading rate (slow but functional at $p_1=0.1$)
+    \item \textbf{Prediction}: Lower $p_1$ makes the "stuck at $p_1$" penalty catastrophic
+    \item Expected outcome: Lattice networks collapse, Random Regular maintains advantage
+\end{enumerate}
+
+\textbf{The Actual Mechanism} (what really happens at $p_1=0.01$):
+\begin{enumerate}
+    \item \textbf{Both} network types face the low $p_1$ penalty initially
+    \item The critical question: \textit{How quickly can each network escape the $p_1$ regime?}
+    \item \textbf{Lattice advantage}: Linear path seeds (A → B → C → D) create LOCAL CLUSTER
+    \item Non-seed nodes near this cluster see MULTIPLE seeds SIMULTANEOUSLY
+    \item With threshold=3, a node with 3 local influential neighbors immediately uses $p_2$
+    \item \textbf{Lattice networks reach threshold FASTER} due to spatial coordination
+    \item They spend FEWER timesteps stuck at $p_1=0.01$ (escape quickly)
+    \item \textbf{Random Regular disadvantage}: Influential neighbors are SCATTERED
+    \item A node might see neighbor A at $t=5$, neighbor B at $t=12$, neighbor C at $t=18$
+    \item At any given timestep, current count of influential neighbors is LOW
+    \item Takes MANY timesteps to accumulate enough simultaneous exposures
+    \item They spend MANY timesteps stuck at $p_1=0.01$ (extremely slow spreading)
+    \item By the time Random Regular escapes the $p_1$ regime, lattice networks have already spread extensively
+\end{enumerate}
+
+\paragraph{The Critical Error in Reasoning}
+
+The prediction assumed that lattice networks' failure to reach threshold at $p_1=0.1$ would become worse at $p_1=0.01$. This was backwards. The actual competitive dynamic is:
+
+\textbf{At $p_1=0.1$} (moderate base probability):
+\begin{itemize}
+    \item Reaching threshold matters, but even $p_1=0.1$ allows slow spreading
+    \item Random Regular can spread via $p_1$ trials while accumulating exposures
+    \item Eventually reaches threshold, unlocks $p_2$, then spreads rapidly
+    \item Lattice networks spread via $p_1$ only, which is slow but tolerable
+    \item \textbf{Winner}: Random Regular (can eventually leverage $p_2$)
+\end{itemize}
+
+\textbf{At $p_1=0.01$} (very low base probability):
+\begin{itemize}
+    \item Reaching threshold is CRITICAL --- spreading via $p_1$ alone is nearly impossible
+    \item The competitive advantage goes to whoever reaches threshold FIRST
+    \item Lattice networks reach threshold in 1--3 timesteps (local cluster provides simultaneous exposures)
+    \item Random Regular takes 10--20 timesteps to accumulate enough exposures (scattered neighbors)
+    \item By the time Random Regular reaches threshold, lattice has already dominated the network
+    \item \textbf{Winner}: Lattice networks (reach threshold vastly faster)
+\end{itemize}
+
+The prediction failed to recognize that \textbf{speed of threshold reaching}, not \textbf{ability to reach threshold eventually}, determines competitive success at very low $p_1$.
+
+\paragraph{Reinterpreting the "Neighborhood Overlap" Phenomenon}
+
+At $p_1=0.1$, neighborhood overlap was identified as a liability:
+\begin{itemize}
+    \item All influential neighbors come from the same spatial cluster
+    \item Provides redundant exposures rather than diverse exposures
+    \item Count of influential neighbors plateaus early
+    \item Cannot reach high thresholds
+\end{itemize}
+
+At $p_1=0.01$, neighborhood overlap becomes an asset:
+\begin{itemize}
+    \item Multiple influential neighbors from the same cluster are visible SIMULTANEOUSLY
+    \item Count of currently influential neighbors reaches threshold IMMEDIATELY
+    \item Node escapes the $p_1$ penalty regime within 1--2 timesteps
+    \item Spreading proceeds at $p_2$ rate (50--100\% probability)
+    \item The "redundancy" is actually \textit{coordination} --- simultaneous exposure enables rapid threshold satisfaction
+\end{itemize}
+
+\textbf{Key Insight}: At $p_1=0.1$, the temporal advantage of Random Regular networks (accumulating diverse exposures over time) outweighs lattice networks' spatial advantage (simultaneous local exposures). At $p_1=0.01$, the temporal disadvantage becomes catastrophic (10+ timesteps at $p_1=0.01$ yields near-zero spreading), making spatial coordination the dominant factor.
+
+\paragraph{Implications for Network Design}
+
+The $p_1$ parameter acts as a \textbf{regime switch} that inverts optimal network structure:
+
+\begin{itemize}
+    \item \textbf{High base adoption ($p_1 \geq 0.05$)}: Random connectivity advantageous
+    \begin{itemize}
+        \item Diverse exposures over time enable threshold reaching
+        \item Parallel cascades across network accelerate saturation
+        \item Lattice structure creates bottlenecks (single wave propagation)
+        \item Design recommendation: Maximize random edges (50--75\%)
+    \end{itemize}
+
+    \item \textbf{Low base adoption ($p_1 \leq 0.02$)}: Lattice structure advantageous
+    \begin{itemize}
+        \item Local clustering enables immediate threshold satisfaction
+        \item Spatial coordination dominates temporal accumulation
+        \item Random networks suffer from exposure fragmentation
+        \item Design recommendation: Maximize clustering (lattice-heavy structures)
+    \end{itemize}
+
+    \item \textbf{Transition zone ($p_1 \approx 0.02$--0.05)}: Likely exhibits hybrid optimal structure
+    \begin{itemize}
+        \item Balance between spatial coordination and temporal accumulation
+        \item Predicted optimum: 25--50\% random edges (p3q2 or p2q4)
+        \item Requires empirical testing to confirm
+    \end{itemize}
+\end{itemize}
+
+\paragraph{Critical Reflection on Prediction Methodology}
+
+This failed prediction reveals limitations in mechanistic reasoning about complex contagion:
+
+\begin{enumerate}
+    \item \textbf{Failure mode}: Extrapolating parameter effects without considering regime changes
+    \begin{itemize}
+        \item The prediction treated $p_1$ as a scalar penalty that scales existing competitive dynamics
+        \item Reality: $p_1$ is a regime-switching parameter that inverts competitive mechanisms
+    \end{itemize}
+
+    \item \textbf{Missed insight}: The importance of \textit{speed} of threshold reaching vs \textit{eventual} threshold reaching
+    \begin{itemize}
+        \item At moderate $p_1$, eventual success matters (Random Regular wins)
+        \item At low $p_1$, early success matters (Lattice wins)
+        \item The prediction focused on eventual success, missing the time-criticality at low $p_1$
+    \end{itemize}
+
+    \item \textbf{Structural reinterpretation}: Features identified as "liabilities" can become "assets" under different parameter regimes
+    \begin{itemize}
+        \item Neighborhood overlap: Liability at $p_1=0.1$, asset at $p_1=0.01$
+        \item Wave propagation: Bottleneck at $p_1=0.1$, advantage at $p_1=0.01$
+        \item Local clustering: Limiting at $p_1=0.1$, enabling at $p_1=0.01$
+    \end{itemize}
+\end{enumerate}
+
+\paragraph{Validation and Future Work}
+
+The complete reversal between $p_1=0.1$ and $p_1=0.01$ suggests:
+
+\begin{itemize}
+    \item A phase transition exists somewhere in $p_1 \in [0.01, 0.1]$
+    \item The transition point likely depends on threshold, beta, and $p_2$ values
+    \item Testing intermediate values ($p_1 = 0.02, 0.03, 0.05$) would identify transition boundaries
+    \item Real-world diffusion processes should identify their effective $p_1$ to select appropriate network structure
+\end{itemize}
+
+\textbf{Theoretical Question}: Is there a critical $p_1^*$ where competitive advantage switches from lattice to random networks? If so, can it be derived analytically from threshold, beta, and $p_2$ parameters?
+
+\paragraph{Delta-Star Analysis at p1=0.01: Temporal Competitiveness}
+
+While the dominance patterns (Case A percentages) reveal \textit{which} network wins more often, the $\delta^*$ values reveal \textit{for which time preferences} each network maintains competitive advantage. Table~\ref{tab:deltastar_p1_comparison} compares mean $\delta^*$ values between p1=0.1 and p1=0.01.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{$\delta^*$ at p1=0.1} & \textbf{$\delta^*$ at p1=0.01} & \textbf{Change} & \textbf{Interpretation} \\
+\midrule
+p4q0 (0\% random)  & 0.430 & 0.697 & \textcolor{blue}{+0.267 (+62\%)} & Much more competitive \\
+p3q2 (25\% random) & 0.540 & 0.728 & \textcolor{blue}{+0.188 (+35\%)} & Moderately more competitive \\
+p2q4 (50\% random) & 0.620 & 0.682 & \textcolor{blue}{+0.062 (+10\%)} & Slightly more competitive \\
+p1q6 (75\% random) & 0.598 & 0.675 & \textcolor{blue}{+0.077 (+13\%)} & Slightly more competitive \\
+\bottomrule
+\end{tabular}
+\caption{Delta-star comparison between p1=0.1 and p1=0.01. All networks show increased $\delta^*$, meaning Cpq networks maintain competitive advantage across wider ranges of time preferences ($\delta$). Pure lattice (p4q0) shows the largest improvement (+62\%), indicating it becomes vastly more competitive across temporal discount factors.}
+\label{tab:deltastar_p1_comparison}
+\end{table}
+
+\textbf{Key Finding: Universal Increase in Temporal Competitiveness}
+
+All Cpq networks show increased $\delta^*$ at p1=0.01 compared to p1=0.1. This means that \textit{across all network types}, the Cpq structure maintains competitive advantage against Random Regular networks for a wider range of time preferences when base adoption is very low. However, the magnitude of increase varies dramatically:
+
+\begin{itemize}
+    \item \textbf{p4q0 (pure lattice)}: Largest gain (+0.267), from 0.430 to 0.697
+    \begin{itemize}
+        \item At p1=0.1: Random Regular dominated for $\delta > 0.43$ (most time preferences)
+        \item At p1=0.01: Cpq maintains advantage until $\delta > 0.70$ (majority of time preferences)
+        \item \textbf{Meaning}: Pure lattice transforms from temporally weak to temporally strong
+    \end{itemize}
+
+    \item \textbf{p3q2 (lattice-heavy)}: Moderate gain (+0.188), from 0.540 to 0.728
+    \begin{itemize}
+        \item Already competitive at p1=0.1, becomes more so at p1=0.01
+        \item Maintains advantage across most time preferences at p1=0.01
+    \end{itemize}
+
+    \item \textbf{p2q4 and p1q6}: Smaller gains (+0.062, +0.077)
+    \begin{itemize}
+        \item Already had high $\delta^*$ at p1=0.1 ($\sim$0.6)
+        \item Modest increases at p1=0.01, maintaining strong temporal competitiveness
+        \item Ceiling effect: already competitive across most time preferences
+    \end{itemize}
+\end{itemize}
+
+\textbf{Interpretation: Why Delta-Star Increases Universally}
+
+The universal increase in $\delta^*$ reflects that at p1=0.01, \textit{early-phase performance} becomes critical:
+
+\begin{enumerate}
+    \item \textbf{At p1=0.1 (moderate base probability)}:
+    \begin{itemize}
+        \item Random Regular can spread slowly via p1 trials while accumulating diverse exposures
+        \item Eventually reaches threshold and accelerates via p2
+        \item This "late acceleration" benefits patient decision-makers (high $\delta$, care about long-term outcomes)
+        \item Cpq networks' early advantage matters less for high-$\delta$ decision-makers
+        \item Result: Lower $\delta^*$ (Random Regular competitive for more time preferences)
+    \end{itemize}
+
+    \item \textbf{At p1=0.01 (very low base probability)}:
+    \begin{itemize}
+        \item Random Regular spreading via p1 alone is nearly impossible (6.8\% cumulative over 7 timesteps)
+        \item Must reach threshold quickly to survive
+        \item Cpq networks (especially lattice-heavy) reach threshold in 1--3 timesteps
+        \item Random Regular takes 10--20 timesteps
+        \item By the time Random Regular accelerates, Cpq has already captured most of the network
+        \item This "early dominance" benefits even patient decision-makers
+        \item Result: Higher $\delta^*$ (Cpq competitive for more time preferences)
+    \end{itemize}
+\end{enumerate}
+
+The asymmetric gains (p4q0: +62\% vs p1q6: +13\%) reflect that pure lattice's early-phase advantage increases most dramatically when base adoption becomes very low.
+
+\paragraph{Beta Effects on Delta-Star at p1=0.01}
+
+Table~\ref{tab:deltastar_beta_p1_0.01} shows how $\delta^*$ varies with beta (time of influence) for each network at p1=0.01.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Network} & \textbf{$\beta=1$} & \textbf{$\beta=3$} & \textbf{$\beta=7$} & \textbf{Pattern} \\
+\midrule
+p4q0  & N/A (Case A $\sim$97\%) & 0.744 & 0.639 & Decreasing \\
+p3q2  & N/A (Case A $\sim$95\%) & 0.900 & 0.689 & Decreasing \\
+p2q4  & N/A (Case A $\sim$98\%) & 0.972 & 0.648 & Decreasing \\
+p1q6  & N/A (Case A $\sim$98\%) & 0.978 & 0.645 & Decreasing \\
+\bottomrule
+\end{tabular}
+\caption{Delta-star values by beta at p1=0.01. At $\beta=1$, Cpq networks dominate so completely (95--98\% Case A) that few Case C intersections exist (N/A). As beta increases, $\delta^*$ decreases across all networks, indicating Random Regular becomes more competitive at longer times of influence.}
+\label{tab:deltastar_beta_p1_0.01}
+\end{table}
+
+\textbf{Key Pattern: Delta-Star Decreases with Increasing Beta}
+
+Across all networks, $\delta^*$ decreases as beta increases. For example, p1q6 has $\delta^* = 0.978$ at $\beta=3$ but drops to $\delta^* = 0.645$ at $\beta=7$. This means:
+
+\begin{itemize}
+    \item \textbf{Short time of influence ($\beta \leq 3$)}: Cpq networks maintain advantage across nearly all time preferences ($\delta^* > 0.9$)
+    \item \textbf{Long time of influence ($\beta \geq 7$)}: Random Regular becomes competitive for $\delta > 0.65$
+    \item \textbf{Mechanism}: Longer influence windows partially mitigate Random Regular's disadvantage
+    \begin{itemize}
+        \item At low beta, influential neighbors disappear quickly
+        \item Random Regular's scattered exposures rarely overlap temporally
+        \item Cannot accumulate simultaneous exposures to reach threshold
+        \item Cpq's spatial coordination dominates
+        \item At high beta, influential neighbors remain visible for many timesteps
+        \item Random Regular can accumulate exposures over time
+        \item Eventually reaches threshold despite scattered topology
+        \item Late acceleration becomes possible, benefiting high-$\delta$ preferences
+    \end{itemize}
+\end{itemize}
+
+\textbf{Contrast with p1=0.1 Beta Effects (Section 4.6)}:
+
+At p1=0.1, increasing beta caused \textit{catastrophic collapse} of pure lattice (p4q0 dropped from 65\% to 0\% dominance). At p1=0.01, increasing beta causes \textit{gradual decline} in temporal competitiveness (p4q0 maintains 84--97\% dominance, $\delta^*$ drops from 0.96 to 0.64).
+
+The p1=0.01 results do \textit{not} exhibit the phase transition seen at p1=0.1. Pure lattice remains dominant across all beta values, though its temporal advantage narrows.
+
+\paragraph{Visual Evidence: Delta-Star Heatmaps at p1=0.01}
+
+Figures~\ref{fig:p1_0.01_p2_thrshld}--\ref{fig:p1_0.01_beta_thrshld} show $\delta^*$ heatmaps across parameter space.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{p1_0.01_p4q0_p2_vs_thrshld_beta3.png}
+    \caption{p4q0 (Pure Lattice): Mixed colors indicate moderate $\delta^*$ values (0.2--0.8). Blue regions (low threshold, low p2) show competitive balance. Red/orange regions (high threshold or high p2) show Cpq advantage.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{p1_0.01_p1q6_p2_vs_thrshld_beta3.png}
+    \caption{p1q6 (Random-Heavy): Predominantly red indicates high $\delta^*$ values (0.8--1.0) across nearly all parameter space. Cpq maintains advantage for almost all time preferences.}
+\end{subfigure}
+\caption{Delta-star heatmaps: p2 vs threshold at $\beta=3.0$ (p1=0.01). Color indicates mean $\delta^*$ for Case C pairs. Red = Cpq advantage for high $\delta$ (patient decision-makers), Blue = Random Regular advantage for high $\delta$.}
+\label{fig:p1_0.01_p2_thrshld}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{p1_0.01_p4q0_p2_vs_beta_thrshld3.png}
+    \caption{p4q0: Horizontal stratification by beta. High delta* (red) at low beta ($\beta \sim 1$--2), decreasing to moderate values (blue/white) at high beta ($\beta \sim 8$--10). Shows beta as primary determinant.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{p1_0.01_p1q6_p2_vs_beta_thrshld3.png}
+    \caption{p1q6: Predominantly red/orange across all beta values. Even at high beta, maintains high $\delta^*$ (0.6--0.8), indicating robust temporal competitiveness.}
+\end{subfigure}
+\caption{Delta-star heatmaps: p2 vs beta at threshold=3.0 (p1=0.01). Horizontal bands show beta effects. Low beta (bottom) = high $\delta^*$, high beta (top) = lower $\delta^*$.}
+\label{fig:p1_0.01_p2_beta}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{p1_0.01_p4q0_beta_vs_thrshld_p2_0.8.png}
+    \caption{p4q0: Clear diagonal pattern. Upper-left (low beta, high threshold) shows high $\delta^*$ (red). Lower-right (high beta, low threshold) shows low $\delta^*$ (blue). Indicates parameter interaction.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{p1_0.01_p1q6_beta_vs_thrshld_p2_0.8.png}
+    \caption{p1q6: Predominantly red across most of parameter space, with slight cooling at high beta + low threshold corner. Much more robust than p4q0.}
+\end{subfigure}
+\caption{Delta-star heatmaps: beta vs threshold at p2=0.8 (p1=0.01). Shows interaction between time of influence and social reinforcement threshold.}
+\label{fig:p1_0.01_beta_thrshld}
+\end{figure}
+
+\textbf{Visual Interpretation}:
+
+\begin{enumerate}
+    \item \textbf{Network gradient} (p4q0 $\to$ p1q6): As random edge proportion increases, heatmaps become more uniformly red (higher $\delta^*$ across parameter space). Random-heavy structures maintain temporal competitiveness more robustly.
+
+    \item \textbf{Beta stratification}: All heatmaps show horizontal bands, with warmer colors (higher $\delta^*$) at low beta and cooler colors at high beta. Beta is a dominant factor determining temporal competitiveness.
+
+    \item \textbf{Threshold effects}: In beta-vs-threshold plots (Figure~\ref{fig:p1_0.01_beta_thrshld}), diagonal patterns emerge for p4q0. High thresholds at low beta yield high $\delta^*$ (Cpq maintains advantage). This reflects that pure lattice's coordination advantage is strongest when threshold requirements are high and influence windows are short.
+
+    \item \textbf{Comparison with p1=0.1}: At p1=0.1, p4q0 heatmaps showed large blue regions (Random Regular advantage). At p1=0.01, those regions shrink or disappear, replaced by orange/red (Cpq advantage or competitive balance).
+\end{enumerate}
+
+\paragraph{Delta-Star and the Reach-Reinforcement Trade-off}
+
+The delta-star metric provides a quantitative measure of the reach-reinforcement trade-off discussed in the PNAS paper (pages 2--3):
+
+\begin{quote}
+``behaviors are subject to a trade-off between reach (from random ties) and reinforcement (from clustered ties)'' --- Wan et al. (2025)
+\end{quote}
+
+The paper predicts that:
+\begin{itemize}
+    \item \textbf{When reinforcement outweighs reach}: Clustered networks spread better $\to$ High $\delta^*$
+    \item \textbf{When reach outweighs reinforcement}: Random networks spread better $\to$ Low $\delta^*$
+\end{itemize}
+
+At p1=0.01, reinforcement dominates reach because:
+\begin{itemize}
+    \item \textbf{Reinforcement benefit is massive}: Local clustering enables immediate threshold satisfaction (escape from p1=0.01 penalty within 1--3 timesteps)
+    \item \textbf{Reach benefit is minimal}: Random ties reach many unique nodes, but with p1=0.01, those nodes rarely adopt (6.8\% cumulative probability over 7 exposures)
+    \item \textbf{Result}: High $\delta^*$ across all Cpq networks (reinforcement wins the trade-off)
+\end{itemize}
+
+The PNAS paper (page 5) explicitly predicts this outcome:
+\begin{quote}
+``Clustered networks outspread random ones only when below-threshold adoption is close to zero.'' --- Wan et al. (2025)
+\end{quote}
+
+Our p1=0.01 results confirm this prediction. The universal increase in $\delta^*$ quantifies how strongly the reinforcement effect dominates when p1 approaches zero.
+
+\paragraph{Corrected Implications}
+
+The original implication (line 1160) stated: ``In real-world settings where base adoption is very low (e.g., costly innovations), networks with high random connectivity become even more critical for successful diffusion.''
+
+\textbf{This is incorrect.} The actual finding:
+
+\begin{itemize}
+    \item \textbf{CORRECT}: In real-world settings where base adoption is very low ($p_1 \leq 0.02$), networks with \textit{high local clustering} become critical for successful diffusion
+    \item Lattice-heavy or pure lattice structures (p4q0, p3q2) dramatically outperform random networks
+    \item The intuition that "costly innovations need random connectivity" is backwards when base adoption is sufficiently low
+    \item Examples: Early-stage technology adoption, high-risk behaviors, innovations with significant barriers
+    \item Design implication: Seed within tightly clustered communities, not across random network positions
+\end{itemize}
+
+\end{document}

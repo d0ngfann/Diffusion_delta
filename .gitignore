@@ -1,7 +1,66 @@
+# Python
 venv/
 env/
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
-.DS_Store
-*.log
+*.so
+.Python
 .env
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Archived experiments
+scripts/archived_experiments/
+
+# Documentation (internal use only)
+CLAUDE.md
+EXPERIMENT_*.md
+data_analysis.md
+UPLOAD_INSTRUCTIONS.md
+scripts/DELTA_STAR_*.md
+scripts/SWEEP_USAGE_GUIDE.md
+scripts/network_description.txt
+
+# Temporary LaTeX files
+about_delta.tex
+scripts/image_generation.tex
+scripts/new_parameter_setting.tex
+
+# Old results (2025 and earlier)
+output_data/2025*
+output_plots/2025*
+output_data/*_sweep_results*.csv
+output_data/delta_star_pairwise_results.csv
+output_data/R_VS_Cpq_n1000_k8_p2_q4_results.csv
+output_plots/delta_star_*
+output_plots/p1_q6/
+output_plots/p2_q4/
+output_plots/p3_q2/
+output_plots/p4_q0/
+output_plots/*.html
+output_plots/*.png
+
+# Other papers
+s41598-022-20551-7.pdf
+
+# Job outputs
+output_job/
+
+# LaTeX auxiliary files
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+report_figures/
+
+# Original repository files
+README.txt

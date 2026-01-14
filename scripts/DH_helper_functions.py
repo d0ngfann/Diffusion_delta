@@ -91,7 +91,61 @@ def seed_strat_adj(G, n, seeds):
     """
     seed_list = list(range(0,seeds))
     return seed_list
-    
+
+def seed_strat_path(G, n, seeds):
+    """
+    Pick seeds that form a connected path (linear chain).
+    Works for both structured (Cpq) and random networks.
+
+    Algorithm:
+    1. Start from random node
+    2. Pick a random neighbor not yet selected
+    3. Continue building a path until we have 'seeds' nodes
+    """
+    # Start from random node
+    start = random.randint(0, n-1)
+    seed_list = [start]
+    current = start
+    visited = {start}
+
+    attempts = 0
+    max_attempts = n * 10  # Prevent infinite loop
+
+    while len(seed_list) < seeds and attempts < max_attempts:
+        attempts += 1
+
+        # Get neighbors not yet visited
+        neighbors = [nb for nb in G.neighbors(current) if nb not in visited]
+
+        if neighbors:
+            # Continue path from current node
+            current = random.choice(neighbors)
+            seed_list.append(current)
+            visited.add(current)
+        else:
+            # Dead end - backtrack to any previously selected seed that has unvisited neighbors
+            found_next = False
+            for seed_node in seed_list:
+                neighbors = [nb for nb in G.neighbors(seed_node) if nb not in visited]
+                if neighbors:
+                    current = random.choice(neighbors)
+                    seed_list.append(current)
+                    visited.add(current)
+                    found_next = True
+                    break
+
+            if not found_next:
+                # No connected path possible, fill with any remaining nodes (rare)
+                remaining = [i for i in range(n) if i not in visited]
+                if remaining:
+                    current = random.choice(remaining)
+                    seed_list.append(current)
+                    visited.add(current)
+                else:
+                    break
+
+    return seed_list[:seeds]  # Ensure exactly 'seeds' nodes
+
 ###################
 # Intermediary processing
 
@@ -418,7 +472,21 @@ def main(G, G_name,k, model, trials,
     """
     n = len(G)
     for p2 in p2_list:
-        prob_list = [0]+ [p1]*(thrshld - 1)+ [p2]*n
+        # Handle fractional thrshld with linear interpolation
+        # This allows for finer-grained threshold values (e.g., thrshld=2.3)
+        floor_thrshld = int(math.floor(thrshld))
+        prob_thrshld = thrshld - floor_thrshld
+
+        if prob_thrshld == 0:
+            # Integer threshold case (e.g., thrshld=2.0)
+            # prob_list[i] = adoption probability when node has i influenced neighbors
+            prob_list = [0] + [p1]*(floor_thrshld - 1) + [p2]*n
+        else:
+            # Fractional threshold case (e.g., thrshld=2.3)
+            # Interpolate between p1 and p2 at the threshold boundary
+            # thrshld=2.3 means: 70% chance of using p1, 30% chance of using p2
+            p_interpolated = p1 * (1 - prob_thrshld) + p2 * prob_thrshld
+            prob_list = [0] + [p1]*(floor_thrshld - 1) + [p_interpolated] + [p2]*n
 
         ddf, testcf =run_simulation(G, G_name, model, trials, 
                    r_start, beta, prob_list, perc, 
