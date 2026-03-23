@@ -419,10 +419,15 @@ def compute_sweep_p2_vs_thrshld(p, q, p1=0.1, N=2000,
         thrshld_values = np.arange(2.0, 5.1, 0.1)
 
     results = []
+    total = sum(1 for _ in thrshld_values for pv in p2_values if p1 <= pv)
+    done = 0
     for thrshld in thrshld_values:
         for p2 in p2_values:
             if p1 > p2:
                 continue
+            done += 1
+            print(f'\r  [{done}/{total}] thrshld={thrshld:.1f} p2={p2:.2f}',
+                  end='', flush=True)
             r = compute_delta_star(p, q, p1, p2, thrshld, N)
             results.append({
                 'p': p,
@@ -442,6 +447,7 @@ def compute_sweep_p2_vs_thrshld(p, q, p1=0.1, N=2000,
                 'delta_star_mgf': r.get('delta_star_mgf'),
                 'delta_star_integral': r.get('delta_star_integral'),
             })
+    print()
     return results
 
 

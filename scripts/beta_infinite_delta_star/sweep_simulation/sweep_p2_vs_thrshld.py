@@ -26,19 +26,6 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.simulation import analyze_pair
 
-try:
-    from tqdm import tqdm
-    HAS_TQDM = True
-except ImportError:
-    HAS_TQDM = False
-    class tqdm:
-        def __init__(self, iterable, desc="", unit="", total=None):
-            self.iterable = iterable
-        def __iter__(self):
-            return iter(self.iterable)
-        @staticmethod
-        def write(msg):
-            print(msg)
 
 
 def generate_parameter_combinations(p, q):
@@ -123,12 +110,19 @@ def run_parameter_sweep(combinations, n_pairs=100, n_workers=8):
             executor.submit(run_single_combination, params, n_pairs): params
             for params in combinations
         }
-        progress = tqdm(as_completed(future_to_params),
-                        total=n_combos, desc="Progress")
-        for future in progress:
+        completed = 0
+        for future in as_completed(future_to_params):
             summary, pairs = future.result()
             summary_results.append(summary)
             full_results.extend(pairs)
+            completed += 1
+            elapsed = time.time() - start_time
+            per_combo = elapsed / completed
+            eta = per_combo * (n_combos - completed)
+            print(f'\r  [{completed}/{n_combos}] '
+                  f'elapsed={timedelta(seconds=int(elapsed))} '
+                  f'ETA={timedelta(seconds=int(eta))}',
+                  end='', flush=True)
 
     total_time = time.time() - start_time
     print(f"\nSweep complete! Total time: {timedelta(seconds=int(total_time))}")
